@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Segment } from '../types/models'
 import { api } from '../api/client'
-import { EditIcon, DownloadIcon } from './icons'
+import { EditIcon, DownloadIcon, BookmarkIcon } from './icons'
 
 interface Props {
   segments: Segment[]
@@ -18,6 +18,7 @@ export function LiveTranscript({ segments }: Props) {
   const [editingSegmentKey, setEditingSegmentKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [optimisticNames, setOptimisticNames] = useState<Record<string, string>>({})
+  const [optimisticBookmarks, setOptimisticBookmarks] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -28,6 +29,7 @@ export function LiveTranscript({ segments }: Props) {
 
   useEffect(() => {
     setOptimisticNames({});
+    setOptimisticBookmarks({});
     setEditingSegmentKey(null);
   }, [currentMeetingId]);
 
@@ -36,8 +38,9 @@ export function LiveTranscript({ segments }: Props) {
       ...segment,
       key: segment.id ?? segment.segment_id ?? `${segment.start_time}-${segment.text}`,
       displaySpeaker: optimisticNames[segment.speaker] || segment.display_name || segment.speaker,
+      isBookmarked: optimisticBookmarks[segment.id ?? segment.segment_id ?? ''] ?? segment.is_bookmarked ?? false
     }))
-  }, [segments, optimisticNames])
+  }, [segments, optimisticNames, optimisticBookmarks])
 
   const startEditing = (segmentKey: string, currentDisplay: string) => {
     setEditingSegmentKey(segmentKey)
@@ -126,6 +129,32 @@ export function LiveTranscript({ segments }: Props) {
               <span className="time-pill">
                 {segment.start_time.toFixed(1)}s - {segment.end_time.toFixed(1)}s
               </span>
+              <button
+                type="button"
+                className="bookmark-btn"
+                onClick={async () => {
+                  if (!segment.key) return
+                  const desiredState = !segment.isBookmarked
+                  setOptimisticBookmarks(prev => ({ ...prev, [segment.key]: desiredState }))
+                  try {
+                    await api.toggleBookmark(segment.meeting_id, segment.key, desiredState)
+                  } catch (err) {
+                    console.error('Failed to toggle bookmark', err)
+                    // Revert on failure
+                    setOptimisticBookmarks(prev => ({ ...prev, [segment.key]: !desiredState }))
+                  }
+                }}
+                title={segment.isBookmarked ? "Remove Bookmark" : "Bookmark this segment"}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '2px',
+                  color: segment.isBookmarked ? '#eebfa5' : 'var(--text-muted)'
+                }}
+              >
+                <BookmarkIcon width={16} height={16} filled={segment.isBookmarked} />
+              </button>
             </header>
             <p>{segment.text}</p>
           </article>

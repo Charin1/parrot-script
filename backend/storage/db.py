@@ -67,6 +67,13 @@ async def init_db() -> None:
     db = await get_db()
     try:
         await db.executescript(SCHEMA_SQL)
+        
+        # Safe migration for new is_bookmarked column
+        async with db.execute("PRAGMA table_info(transcript_segments)") as cur:
+            columns = [dict(row)["name"] for row in await cur.fetchall()]
+            if "is_bookmarked" not in columns:
+                await db.execute("ALTER TABLE transcript_segments ADD COLUMN is_bookmarked BOOLEAN DEFAULT 0")
+        
         await db.commit()
     finally:
         await db.close()

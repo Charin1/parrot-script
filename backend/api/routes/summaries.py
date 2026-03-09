@@ -4,6 +4,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from backend.core.exceptions import OllamaUnavailableError
 from backend.llm.summarizer import MeetingSummarizer
@@ -52,7 +53,7 @@ async def get_or_create_summary(meeting_id: UUID) -> dict:
         }
 
     try:
-        result = await summarizer.summarize(transcript=transcript, meeting_id=meeting_id_str)
+        result = await summarizer.summarize(transcript=transcript, meeting_id=meeting_id_str, prompt_template=None)
     except OllamaUnavailableError as exc:
         raise HTTPException(status_code=503, detail='Ollama unavailable') from exc
 
@@ -63,8 +64,11 @@ async def get_or_create_summary(meeting_id: UUID) -> dict:
     return created
 
 
+class SummarizeRequest(BaseModel):
+    prompt_template: Optional[str] = None
+
 @router.post('/{meeting_id}/summarize')
-async def force_summarize(meeting_id: UUID) -> dict:
+async def force_summarize(meeting_id: UUID, body: Optional[SummarizeRequest] = None) -> dict:
     meeting_id_str = str(meeting_id)
     await _require_meeting(meeting_id_str)
 
@@ -72,8 +76,10 @@ async def force_summarize(meeting_id: UUID) -> dict:
     if not transcript:
         raise HTTPException(status_code=400, detail='Transcript is empty')
 
+    prompt_template = body.prompt_template if body else None
+
     try:
-        result = await summarizer.summarize(transcript=transcript, meeting_id=meeting_id_str)
+        result = await summarizer.summarize(transcript=transcript, meeting_id=meeting_id_str, prompt_template=prompt_template)
     except OllamaUnavailableError as exc:
         raise HTTPException(status_code=503, detail='Ollama unavailable') from exc
 

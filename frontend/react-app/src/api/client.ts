@@ -94,8 +94,10 @@ export const api = {
     return data
   },
 
-  async generateSummary(id: string): Promise<Summary> {
-    const { data } = await client.post<Summary>(`/meetings/${id}/summarize`)
+  async generateSummary(id: string, promptTemplate?: string): Promise<Summary> {
+    const { data } = await client.post<Summary>(`/meetings/${id}/summarize`, {
+      prompt_template: promptTemplate
+    })
     return data
   },
 
@@ -134,6 +136,13 @@ export const api = {
     document.body.appendChild(link)
     link.click()
     link.parentNode?.removeChild(link)
+  },
+
+  async toggleBookmark(meetingId: string, segmentId: string, isBookmarked: boolean): Promise<{ id: string, is_bookmarked: boolean }> {
+    const { data } = await client.patch<{ id: string, is_bookmarked: boolean }>(`/meetings/${meetingId}/segments/${segmentId}/bookmark`, {
+      is_bookmarked: isBookmarked
+    })
+    return data
   },
 }
 

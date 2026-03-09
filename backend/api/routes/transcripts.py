@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from backend.storage.repositories.meetings import MeetingsRepository
 from backend.storage.repositories.segments import SegmentsRepository
@@ -66,3 +67,26 @@ async def download_transcript(
             content=segments,
             headers={"Content-Disposition": f'attachment; filename="transcript_{meeting_id_str}.json"'}
         )
+
+
+class BookmarkToggleRequest(BaseModel):
+    is_bookmarked: bool
+
+
+@router.patch('/{meeting_id}/segments/{segment_id}/bookmark')
+async def toggle_segment_bookmark(
+    meeting_id: UUID, 
+    segment_id: str, 
+    body: BookmarkToggleRequest
+) -> dict[str, Any]:
+    meeting_id_str = str(meeting_id)
+    # Fast verify meeting
+    meeting = await meetings_repo.get(meeting_id_str)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail='Meeting not found')
+        
+    updated = await segments_repo.toggle_bookmark(segment_id, body.is_bookmarked)
+    if not updated:
+        raise HTTPException(status_code=404, detail='Transcript segment not found')
+        
+    return {"id": segment_id, "is_bookmarked": body.is_bookmarked}

@@ -168,10 +168,10 @@ function App() {
     })
   }
 
-  const generateSummary = async () => {
+  const generateSummary = async (promptTemplate?: string) => {
     if (!selectedMeetingId) return
     await runBusy(async () => {
-      const data = await api.generateSummary(selectedMeetingId)
+      const data = await api.generateSummary(selectedMeetingId, promptTemplate)
       setSummary(data)
     })
   }

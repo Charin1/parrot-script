@@ -20,6 +20,7 @@ export interface Segment {
   start_time: number
   end_time: number
   confidence: number
+  is_bookmarked?: boolean
 }
 
 export interface Summary {

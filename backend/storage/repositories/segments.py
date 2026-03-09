@@ -11,8 +11,8 @@ class SegmentsRepository:
             await db.execute(
                 """
                 INSERT INTO transcript_segments(
-                    id, meeting_id, speaker, text, start_time, end_time, confidence
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    id, meeting_id, speaker, text, start_time, end_time, confidence, is_bookmarked
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
                 """,
                 (
                     segment.segment_id,
@@ -36,6 +36,7 @@ class SegmentsRepository:
             "start_time": segment.start_time,
             "end_time": segment.end_time,
             "confidence": segment.confidence,
+            "is_bookmarked": False,
         }
 
     async def get_by_meeting(self, meeting_id: str) -> list[dict]:
@@ -43,7 +44,7 @@ class SegmentsRepository:
         try:
             async with db.execute(
                 """
-                SELECT ts.*, s.name as display_name
+                SELECT ts.*, CAST(IFNULL(ts.is_bookmarked, 0) AS BOOLEAN) as is_bookmarked, s.name as display_name
                 FROM transcript_segments ts
                 LEFT JOIN speakers s ON ts.meeting_id = s.meeting_id AND ts.speaker = s.label
                 WHERE ts.meeting_id = ?
@@ -56,12 +57,25 @@ class SegmentsRepository:
         finally:
             await db.close()
 
+    async def toggle_bookmark(self, segment_id: str, is_bookmarked: bool) -> bool:
+        db = await get_db()
+        try:
+            val = 1 if is_bookmarked else 0
+            cur = await db.execute(
+                "UPDATE transcript_segments SET is_bookmarked = ? WHERE id = ?",
+                (val, segment_id)
+            )
+            await db.commit()
+            return cur.rowcount > 0
+        finally:
+            await db.close()
+
     async def get_by_meeting_paginated(self, meeting_id: str, limit: int, offset: int) -> list[dict]:
         db = await get_db()
         try:
             async with db.execute(
                 """
-                SELECT ts.*, s.name as display_name
+                SELECT ts.*, CAST(IFNULL(ts.is_bookmarked, 0) AS BOOLEAN) as is_bookmarked, s.name as display_name
                 FROM transcript_segments ts
                 LEFT JOIN speakers s ON ts.meeting_id = s.meeting_id AND ts.speaker = s.label
                 WHERE ts.meeting_id = ?
