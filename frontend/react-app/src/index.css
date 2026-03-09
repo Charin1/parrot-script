@@ -264,8 +264,10 @@ input {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  max-height: 360px;
-  overflow: auto;
+  max-height: 50vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0.25rem;
 }
 
 .runtime-panel {
@@ -540,8 +542,9 @@ input {
 }
 
 .markdown-body {
-  max-height: 320px;
-  overflow: auto;
+  max-height: 50vh;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 0.4rem;
 }
 
@@ -579,7 +582,7 @@ code {
   .search-results,
   .transcript-scroll,
   .markdown-body {
-    max-height: 240px;
+    max-height: 60vh;
   }
 
   .controls-panel {
@@ -614,14 +617,25 @@ code {
   .dashboard-meeting-row {
     flex-direction: column;
     align-items: flex-start;
+    gap: 0.5rem;
   }
 
   .dashboard-meta {
     width: 100%;
     justify-content: space-between;
+    margin-top: 0.25rem;
   }
 
   .security-form {
     grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .panel {
+    padding: 1rem;
+  }
+
+  h3 {
+    font-size: 1.15rem;
   }
 }
