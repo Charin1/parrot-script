@@ -1,0 +1,47 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Local data
+*.db
+*.sqlite
+/data/chroma/
+/data/*.db
+
+# Logs
+*.log
+
+# Node / frontend
+frontend/react-app/node_modules/
+frontend/react-app/dist/
+frontend/react-app/.vite/
+frontend/react-app/.cache/
+
+# Test coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+
+# Audio Output
+*.pcm
+*.wav

@@ -1,0 +1,138 @@
+import asyncio
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi.testclient import TestClient
+
+from backend.api.server import app
+from backend.config import settings
+from backend.core.events import TranscriptSegmentEvent
+from backend.storage.db import init_db
+from backend.storage.repositories.segments import SegmentsRepository
+from backend.storage.repositories.speakers import SpeakersRepository
+from backend.storage.repositories.summaries import SummariesRepository
+
+
+def setup_test_db(tmp_path) -> TestClient:
+    db_file = tmp_path / 'test_api.db'
+    settings.db_path = db_file.as_posix()
+    settings.api_token = 'test-token'
+    Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
+    asyncio.run(init_db())
+    return TestClient(app)
+
+
+def auth_headers() -> dict[str, str]:
+    return {'Authorization': f'Bearer {settings.api_token}'}
+
+
+def test_create_and_list_meetings(tmp_path) -> None:
+    client = setup_test_db(tmp_path)
+
+    unauthorized = client.get('/api/meetings/')
+    assert unauthorized.status_code == 401
+
+    response = client.get('/api/meetings/', headers=auth_headers())
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+    created = client.post('/api/meetings/', json={'title': 'Test Meeting'}, headers=auth_headers())
+    assert created.status_code == 200
+    body = created.json()
+    assert 'id' in body
+    assert body['title'] == 'Test Meeting'
+
+    security = client.get('/health')
+    assert security.status_code == 200
+    assert security.headers['x-content-type-options'] == 'nosniff'
+    assert security.headers['x-frame-options'] == 'DENY'
+
+    bad_update = client.patch(
+        f"/api/meetings/{body['id']}",
+        json={'status': 'hacked'},
+        headers=auth_headers(),
+    )
+    assert bad_update.status_code == 422
+
+
+def test_delete_meeting_with_related_rows(tmp_path) -> None:
+    client = setup_test_db(tmp_path)
+
+    created = client.post(
+        '/api/meetings/',
+        json={'title': 'Delete with children'},
+        headers=auth_headers(),
+    )
+    assert created.status_code == 200
+    meeting_id = created.json()['id']
+
+    async def seed_children() -> None:
+        await SegmentsRepository().insert(
+            TranscriptSegmentEvent(
+                meeting_id=meeting_id,
+                speaker='Speaker 1',
+                text='Hello world',
+                start_time=0.0,
+                end_time=1.0,
+                confidence=0.9,
+                segment_id=str(uuid4()),
+            )
+        )
+        await SpeakersRepository().upsert(meeting_id, 'Speaker 1')
+        await SummariesRepository().insert(meeting_id, 'Summary content', 'test-model')
+
+    asyncio.run(seed_children())
+
+    deleted = client.delete(f'/api/meetings/{meeting_id}', headers=auth_headers())
+    assert deleted.status_code == 200
+    assert deleted.json()['deleted'] is True
+
+    missing = client.get(f'/api/meetings/{meeting_id}', headers=auth_headers())
+    assert missing.status_code == 404
+
+
+def test_transcript_pagination(tmp_path) -> None:
+    client = setup_test_db(tmp_path)
+
+    created = client.post(
+        '/api/meetings/',
+        json={'title': 'Transcript pages'},
+        headers=auth_headers(),
+    )
+    assert created.status_code == 200
+    meeting_id = created.json()['id']
+
+    async def seed_segments() -> None:
+        repo = SegmentsRepository()
+        for index in range(3):
+            await repo.insert(
+                TranscriptSegmentEvent(
+                    meeting_id=meeting_id,
+                    speaker='Speaker 1',
+                    text=f'Segment {index + 1}',
+                    start_time=float(index),
+                    end_time=float(index) + 0.5,
+                    confidence=0.9,
+                    segment_id=str(uuid4()),
+                )
+            )
+
+    asyncio.run(seed_segments())
+
+    page1 = client.get(
+        f'/api/meetings/{meeting_id}/transcript?page=1&limit=2',
+        headers=auth_headers(),
+    )
+    assert page1.status_code == 200
+    body1 = page1.json()
+    assert body1['total'] == 3
+    assert len(body1['items']) == 2
+
+    page2 = client.get(
+        f'/api/meetings/{meeting_id}/transcript?page=2&limit=2',
+        headers=auth_headers(),
+    )
+    assert page2.status_code == 200
+    body2 = page2.json()
+    assert body2['total'] == 3
+    assert len(body2['items']) == 1
