@@ -3,11 +3,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, AsyncGenerator
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+import aiofiles
+from pathlib import Path
+
+from backend.config import settings
 
 from backend.core.pipeline import MeetingPipeline
 from backend.storage.repositories.meetings import MeetingsRepository
@@ -98,6 +103,35 @@ async def get_meeting(meeting_id: UUID) -> dict[str, Any]:
     return meeting
 
 
+@router.get('/{meeting_id}/audio')
+async def get_meeting_audio(meeting_id: UUID) -> FileResponse:
+    meeting_id_str = str(meeting_id)
+    meeting = await meetings_repo.get(meeting_id_str)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail='Meeting not found')
+        
+    audio_path = Path(settings.db_path).parent / f"{meeting_id_str}.wav"
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail='Audio not found for this meeting')
+        
+    async def audio_generator() -> AsyncGenerator[bytes, None]:
+        async with aiofiles.open(audio_path, 'rb') as f:
+            while True:
+                chunk = await f.read(65536)
+                if not chunk:
+                    # If the meeting is still recording, we shouldn't necessarily close the stream,
+                    # but for HTTP GET, standard behavior is to end when EOF is hit. 
+                    # The client audio player will just request range again if needed.
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        audio_generator(),
+        media_type="audio/wav",
+        headers={"Accept-Ranges": "bytes"}
+    )
+
+
 @router.patch('/{meeting_id}')
 async def update_meeting(meeting_id: UUID, body: UpdateMeetingRequest) -> dict[str, Any]:
     meeting_id_str = str(meeting_id)
@@ -165,8 +199,12 @@ async def stop_recording(meeting_id: UUID) -> dict[str, str]:
     pipeline = active_pipelines.pop(meeting_id_str, None)
     if pipeline is not None:
         await pipeline.stop()
+        
+    final_duration = (meeting.get('duration_s') or 0.0)
+    if pipeline is not None:
+        final_duration += max(0.0, time.time() - pipeline.start_epoch)
 
-    await meetings_repo.end_meeting(meeting_id_str)
+    await meetings_repo.end_meeting(meeting_id_str, final_duration)
     return {'status': 'completed', 'meeting_id': meeting_id_str}
 
 

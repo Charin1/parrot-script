@@ -8,6 +8,9 @@ from pydantic import BaseModel
 
 from backend.storage.repositories.meetings import MeetingsRepository
 from backend.storage.repositories.segments import SegmentsRepository
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix='/api/meetings', tags=['transcripts'])
 segments_repo = SegmentsRepository()
@@ -32,6 +35,9 @@ async def get_transcript(
         limit=limit,
         offset=start,
     )
+    
+    logger.info("Serving %d segments. First few speakers: %s", len(segments), [s.get('speaker') for s in segments[:5]])
+    
     return {
         'items': segments,
         'page': page,
@@ -72,6 +78,9 @@ async def download_transcript(
 class BookmarkToggleRequest(BaseModel):
     is_bookmarked: bool
 
+class UpdateSegmentTextRequest(BaseModel):
+    text: str
+
 
 @router.patch('/{meeting_id}/segments/{segment_id}/bookmark')
 async def toggle_segment_bookmark(
@@ -90,3 +99,21 @@ async def toggle_segment_bookmark(
         raise HTTPException(status_code=404, detail='Transcript segment not found')
         
     return {"id": segment_id, "is_bookmarked": body.is_bookmarked}
+
+@router.patch('/{meeting_id}/segments/{segment_id}/text')
+async def update_segment_text(
+    meeting_id: UUID, 
+    segment_id: str, 
+    body: UpdateSegmentTextRequest
+) -> dict[str, Any]:
+    meeting_id_str = str(meeting_id)
+    # Fast verify meeting
+    meeting = await meetings_repo.get(meeting_id_str)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail='Meeting not found')
+        
+    updated = await segments_repo.update_text(segment_id, body.text)
+    if not updated:
+        raise HTTPException(status_code=404, detail='Transcript segment not found')
+        
+    return {"id": segment_id, "text": body.text}

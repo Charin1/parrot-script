@@ -12,6 +12,7 @@ from backend.audio.capture import AudioCapture
 from backend.config import settings
 from backend.core.events import MeetingStatusEvent, TranscriptSegmentEvent
 from backend.diarization.speaker_cluster import SpeakerClusterer
+from pathlib import Path
 from backend.storage.repositories.segments import SegmentsRepository
 from backend.storage.repositories.speakers import SpeakersRepository
 from backend.transcription.whisper_stream import WhisperTranscriber
@@ -22,10 +23,13 @@ logger = logging.getLogger(__name__)
 class MeetingPipeline:
     def __init__(self, meeting_id: str):
         self.meeting_id = meeting_id
+        audio_path = Path(settings.db_path).parent / f"{meeting_id}.wav"
+        
         self.capture = AudioCapture(
             device_index=settings.audio_device_index,
             sample_rate=settings.audio_sample_rate,
             chunk_seconds=settings.audio_chunk_seconds,
+            record_to_file=audio_path,
         )
         self.transcriber = WhisperTranscriber()
         self.clusterer = SpeakerClusterer()
@@ -41,7 +45,12 @@ class MeetingPipeline:
             return
 
         self.clusterer.reset()
+        
         loop = asyncio.get_running_loop()
+        
+        existing_speakers = await self.speakers_repo.get_by_meeting(self.meeting_id)
+        if existing_speakers:
+            self.clusterer.speaker_count = len(existing_speakers)
 
         await loop.run_in_executor(None, self.transcriber.load_model)
         await loop.run_in_executor(None, self.clusterer.embedder.load)
@@ -122,8 +131,8 @@ class MeetingPipeline:
                 meeting_id=self.meeting_id,
                 speaker=speaker,
                 text=segment.text,
-                start_time=(chunk.timestamp - self.start_epoch) + segment.start,
-                end_time=(chunk.timestamp - self.start_epoch) + segment.end,
+                start_time=chunk.timestamp + segment.start,
+                end_time=chunk.timestamp + segment.end,
                 confidence=segment.confidence,
                 segment_id=str(uuid4()),
             )

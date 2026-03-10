@@ -13,7 +13,7 @@ pip install -r requirements.txt
 ### Frontend
 
 ```bash
-cd frontend/react-app
+cd frontend
 npm install
 cd ../..
 ```
@@ -50,7 +50,7 @@ uvicorn backend.api.server:app --host 127.0.0.1 --port 8000 --log-level info
 ### Frontend dev server
 
 ```bash
-cd frontend/react-app
+cd frontend
 npm run dev
 ```
 

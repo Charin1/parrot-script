@@ -41,8 +41,10 @@ async def verify_http_request(request: Request) -> Response | None:
     if not auth_enabled() or request.url.path in PUBLIC_PATHS:
         return None
 
-    token = extract_bearer_token(request.headers.get("Authorization"))
-    if not token_valid(token):
+    header_token = extract_bearer_token(request.headers.get("Authorization"))
+    query_token = request.query_params.get("token")
+
+    if not token_valid(header_token) and not token_valid(query_token):
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={"detail": "Missing or invalid API token"},

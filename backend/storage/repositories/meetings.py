@@ -85,18 +85,18 @@ class MeetingsRepository:
         finally:
             await db.close()
 
-    async def end_meeting(self, meeting_id: str) -> dict:
+    async def end_meeting(self, meeting_id: str, duration_s: float) -> dict:
         db = await get_db()
         try:
             await db.execute(
                 """
                 UPDATE meetings
                 SET ended_at = datetime('now'),
-                    duration_s = (julianday(datetime('now')) - julianday(created_at)) * 86400.0,
+                    duration_s = ?,
                     status = 'completed'
                 WHERE id = ?
                 """,
-                (meeting_id,),
+                (duration_s, meeting_id,),
             )
             await db.commit()
         finally:

@@ -55,10 +55,10 @@ class SpeakerClusterer:
             return np.zeros(256, dtype=np.float32)
         return np.mean(np.stack(matches), axis=0)
 
-    def reset(self) -> None:
+    def reset(self, initial_speaker_count: int = 0) -> None:
         self.embedding_history.clear()
         self.labels.clear()
-        self.speaker_count = 0
+        self.speaker_count = initial_speaker_count
 
     @property
     def unique_speakers(self) -> list[str]:

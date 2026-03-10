@@ -1011,7 +1011,7 @@ python scripts/list_audio_devices.py
 uvicorn backend.main:app --reload --port 8000
 
 # 6. Start the frontend (React)
-cd frontend/react-app && npm install && npm run dev
+cd frontend && npm install && npm run dev
 
 # 7. Open http://localhost:5173 → click Start Meeting
 ```

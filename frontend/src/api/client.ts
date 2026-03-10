@@ -138,11 +138,36 @@ export const api = {
     link.parentNode?.removeChild(link)
   },
 
+  async downloadAudio(id: string): Promise<void> {
+    const response = await client.get(`/meetings/${id}/audio`, { responseType: 'blob' })
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'audio/wav' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', `audio_${id}.wav`)
+    document.body.appendChild(link)
+    link.click()
+    link.parentNode?.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  },
+
   async toggleBookmark(meetingId: string, segmentId: string, isBookmarked: boolean): Promise<{ id: string, is_bookmarked: boolean }> {
     const { data } = await client.patch<{ id: string, is_bookmarked: boolean }>(`/meetings/${meetingId}/segments/${segmentId}/bookmark`, {
       is_bookmarked: isBookmarked
     })
     return data
+  },
+
+  async updateSegmentText(meetingId: string, segmentId: string, text: string): Promise<{ id: string, text: string }> {
+    const { data } = await client.patch<{ id: string, text: string }>(`/meetings/${meetingId}/segments/${segmentId}/text`, {
+      text
+    })
+    return data
+  },
+
+  getAudioUrl(meetingId: string): string {
+    const token = getApiToken()
+    const url = `/api/meetings/${meetingId}/audio`
+    return token ? `${url}?token=${encodeURIComponent(token)}` : url
   },
 }
 

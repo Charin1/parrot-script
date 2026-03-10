@@ -70,6 +70,18 @@ class SegmentsRepository:
         finally:
             await db.close()
 
+    async def update_text(self, segment_id: str, new_text: str) -> bool:
+        db = await get_db()
+        try:
+            cur = await db.execute(
+                "UPDATE transcript_segments SET text = ? WHERE id = ?",
+                (new_text, segment_id)
+            )
+            await db.commit()
+            return cur.rowcount > 0
+        finally:
+            await db.close()
+
     async def get_by_meeting_paginated(self, meeting_id: str, limit: int, offset: int) -> list[dict]:
         db = await get_db()
         try:

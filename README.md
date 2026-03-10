@@ -1,6 +1,6 @@
 # Parrot Script
 
-![Parrot Script logo](frontend/react-app/public/parrot-script-logo.svg)
+![Parrot Script logo](frontend/public/parrot-script-logo.svg)
 
 Parrot Script is a local-first meeting workspace for system-audio capture, Whisper transcription, speaker labeling, semantic search, and Ollama-based summaries.
 
@@ -16,7 +16,7 @@ After setup, the normal runtime does not require internet access. The browser UI
 ## Project Layout
 
 - `backend/`: API, transcription pipeline, diarization, storage, summarization
-- `frontend/react-app/`: React + Vite UI
+- `frontend/`: React + Vite UI
 - `scripts/`: startup and local helper scripts
 - `tests/`: unit and API tests
 - `data/`: SQLite and vector-store persistence
@@ -74,7 +74,7 @@ pip install -r requirements.txt
 3. Install frontend dependencies:
 
 ```bash
-cd frontend/react-app
+cd frontend
 npm install
 cd ../..
 ```

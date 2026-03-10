@@ -11,17 +11,21 @@ from backend.audio.vad import VoiceActivityDetector
 from backend.config import settings
 from backend.core.events import AudioChunkEvent
 from backend.core.exceptions import AudioCaptureError
+import wave
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 class AudioCapture:
-    def __init__(self, device_index: int, sample_rate: int = 16000, chunk_seconds: int = 5):
+    def __init__(self, device_index: int, sample_rate: int = 16000, chunk_seconds: int = 5, record_to_file: Optional[Path] = None):
         self.device_index = device_index
         self.sample_rate = sample_rate
         self.chunk_seconds = chunk_seconds
+        self.record_to_file = record_to_file
 
         self.queue: asyncio.Queue[AudioChunkEvent] = asyncio.Queue()
+        self._wav_file: Optional[wave.Wave_write] = None
         self._process: Optional[subprocess.Popen] = None
         self._reader_thread_handle: Optional[threading.Thread] = None
         self._stderr_thread_handle: Optional[threading.Thread] = None
@@ -34,11 +38,36 @@ class AudioCapture:
             aggressiveness=settings.audio_vad_aggressiveness,
             sample_rate=self.sample_rate,
         )
+        self._start_offset_s: float = 0.0
 
     async def start(self) -> None:
         """Launch FFmpeg subprocess and start background reader thread."""
         if self._running:
             return
+
+        if self.record_to_file:
+            self.record_to_file.parent.mkdir(parents=True, exist_ok=True)
+            if self.record_to_file.exists():
+                logger.info("Resuming audio capture: appending to existing %s", self.record_to_file)
+                try:
+                    with wave.open(str(self.record_to_file), 'rb') as old_wav:
+                        params = old_wav.getparams()
+                        old_frames = old_wav.readframes(old_wav.getnframes())
+                        self._start_offset_s = old_wav.getnframes() / old_wav.getframerate()
+                    self._wav_file = wave.open(str(self.record_to_file), 'wb')
+                    self._wav_file.setparams(params)
+                    self._wav_file.writeframes(old_frames)
+                except Exception as e:
+                    logger.error("Failed to append to existing wav file: %s", e)
+                    self._wav_file = wave.open(str(self.record_to_file), 'wb')
+                    self._wav_file.setnchannels(1)
+                    self._wav_file.setsampwidth(2)
+                    self._wav_file.setframerate(self.sample_rate)
+            else:
+                self._wav_file = wave.open(str(self.record_to_file), 'wb')
+                self._wav_file.setnchannels(1)
+                self._wav_file.setsampwidth(2) # 16-bit
+                self._wav_file.setframerate(self.sample_rate)
 
         self._loop = asyncio.get_running_loop()
         self._process = subprocess.Popen(
@@ -77,6 +106,14 @@ class AudioCapture:
 
         if self._stderr_thread_handle is not None and self._stderr_thread_handle.is_alive():
             self._stderr_thread_handle.join(timeout=1.0)
+
+        if self._wav_file:
+            try:
+                self._wav_file.close()
+            except Exception as e:
+                logger.error("Failed to close wav file: %s", e)
+            finally:
+                self._wav_file = None
 
     def _build_ffmpeg_cmd(self) -> list[str]:
         import sys
@@ -137,12 +174,19 @@ class AudioCapture:
                 data = self._process.stdout.read(4096)
                 if not data:
                     if self._process.poll() is not None:
-                        logger.error("FFmpeg process exited unexpectedly with code %s", self._process.poll())
+                        if self._running:
+                            logger.error("FFmpeg process exited unexpectedly with code %s", self._process.poll())
                         break
                     time.sleep(0.01)
                     continue
 
                 self._buffer.extend(data)
+                
+                if self._wav_file:
+                    try:
+                        self._wav_file.writeframes(data)
+                    except Exception as e:
+                        logger.error("Failed writing frames to wav: %s", e)
 
                 while len(self._buffer) >= self._chunk_size_bytes:
                     chunk = bytes(self._buffer[: self._chunk_size_bytes])
@@ -151,9 +195,13 @@ class AudioCapture:
                     if not self._vad.filter_silent_chunks(chunk):
                         continue
 
+                    # The timestamp should be the exact position in the final WAV file.
+                    # This prevents offsets when the meeting is stopped and resumed.
+                    relative_ts = self._start_offset_s + (self._chunk_index * self.chunk_seconds)
+
                     event = AudioChunkEvent(
                         data=chunk,
-                        timestamp=time.time(),
+                        timestamp=relative_ts,
                         chunk_index=self._chunk_index,
                     )
                     self._chunk_index += 1

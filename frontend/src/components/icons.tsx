@@ -69,6 +69,33 @@ export function StopIcon(props: IconProps) {
   )
 }
 
+export function PauseIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M10 6H6v12h4V6zm8 0h-4v12h4V6z" fill="currentColor" />
+    </IconBase>
+  )
+}
+
+export function VolumeUpIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor" />
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </IconBase>
+  )
+}
+
+export function VolumeMuteIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor" />
+      <path d="M23 9l-6 6M17 9l6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </IconBase>
+  )
+}
+
 export function PlusIcon(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -138,6 +165,20 @@ export function BookmarkIcon(props: IconProps & { filled?: boolean }) {
         strokeWidth="1.8"
         fill={props.filled ? "currentColor" : "none"}
         d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z"
+      />
+    </IconBase>
+  )
+}
+
+export function SyncIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
       />
     </IconBase>
   )

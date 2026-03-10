@@ -21,11 +21,11 @@ This document is for future agents or developers who need to make targeted chang
 
 ### Frontend runtime and network behavior
 
-- `frontend/react-app/src/App.tsx`: shared app state and orchestration
-- `frontend/react-app/src/api/client.ts`: all REST calls and error formatting
-- `frontend/react-app/src/hooks/useWebSocket.ts`: live stream reliability and transcript buffering
-- `frontend/react-app/src/hooks/useLocalRuntime.ts`: local backend health probing
-- `frontend/react-app/vite.config.ts`: loopback binding and proxy setup
+- `frontend/src/App.tsx`: shared app state and orchestration
+- `frontend/src/api/client.ts`: all REST calls and error formatting
+- `frontend/src/hooks/useWebSocket.ts`: live stream reliability and transcript buffering
+- `frontend/src/hooks/useLocalRuntime.ts`: local backend health probing
+- `frontend/vite.config.ts`: loopback binding and proxy setup
 
 ## Change Impact Map
 
@@ -35,9 +35,9 @@ Check these files:
 
 - `backend/api/auth.py`
 - `backend/api/server.py`
-- `frontend/react-app/src/api/client.ts`
-- `frontend/react-app/src/hooks/useWebSocket.ts`
-- `frontend/react-app/src/App.tsx`
+- `frontend/src/api/client.ts`
+- `frontend/src/hooks/useWebSocket.ts`
+- `frontend/src/App.tsx`
 - `tests/test_api.py`
 
 ### If you change meeting lifecycle behavior
@@ -47,9 +47,9 @@ Check these files:
 - `backend/api/routes/meetings.py`
 - `backend/core/pipeline.py`
 - `backend/storage/repositories/meetings.py`
-- `frontend/react-app/src/App.tsx`
-- `frontend/react-app/src/components/MeetingControls.tsx`
-- `frontend/react-app/src/components/MeetingList.tsx`
+- `frontend/src/App.tsx`
+- `frontend/src/components/MeetingControls.tsx`
+- `frontend/src/components/MeetingList.tsx`
 
 ### If you change transcript behavior
 
@@ -58,8 +58,8 @@ Check these files:
 - `backend/transcription/whisper_stream.py`
 - `backend/storage/repositories/segments.py`
 - `backend/api/routes/transcripts.py`
-- `frontend/react-app/src/hooks/useWebSocket.ts`
-- `frontend/react-app/src/components/LiveTranscript.tsx`
+- `frontend/src/hooks/useWebSocket.ts`
+- `frontend/src/components/LiveTranscript.tsx`
 
 ### If you change summarization or search
 
@@ -71,8 +71,8 @@ Check these files:
 - `backend/api/routes/summaries.py`
 - `backend/storage/vector_store.py`
 - `backend/api/routes/search.py`
-- `frontend/react-app/src/components/SummaryPanel.tsx`
-- `frontend/react-app/src/components/SearchBar.tsx`
+- `frontend/src/components/SummaryPanel.tsx`
+- `frontend/src/components/SearchBar.tsx`
 
 ### If you change audio capture or diarization
 
@@ -114,7 +114,7 @@ PYTHONPYCACHEPREFIX=/tmp/parrot-script-pycache .venv/bin/python -m pytest -q
 ### Frontend changes
 
 ```bash
-cd frontend/react-app
+cd frontend
 npm run typecheck
 npm run build
 ```

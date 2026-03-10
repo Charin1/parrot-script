@@ -45,33 +45,33 @@ This index maps every source file to its main purpose and the symbols that matte
 
 ## Frontend
 
-- `frontend/react-app/src/main.tsx`: app bootstrap and initial theme resolution.
-- `frontend/react-app/src/App.tsx`: main UI orchestration, data loading, auth panel, workspace switching.
-- `frontend/react-app/src/index.css`: global design tokens, layout, and responsive styles.
-- `frontend/react-app/src/api/client.ts`: axios client and token helpers. Symbols: `getApiToken`, `setApiToken`, `clearApiToken`, `formatApiError`, `api`.
-- `frontend/react-app/src/types/models.ts`: shared API/UI types. Symbols: `MeetingLifecycleStatus`, `Meeting`, `Segment`, `Summary`, `MeetingStatus`, `SearchResult`.
-- `frontend/react-app/src/hooks/useTheme.ts`: theme persistence and system-theme tracking. Symbols: `ThemeMode`, `useTheme`, `readStoredMode`, `resolveTheme`.
-- `frontend/react-app/src/hooks/useLocalRuntime.ts`: browser/backend health probe. Symbols: `BackendReachability`, `useLocalRuntime`.
-- `frontend/react-app/src/hooks/useWebSocket.ts`: live transcript stream management. Symbols: `StreamConnectionState`, `useWebSocket`, `segmentKey`, `appendSegment`.
-- `frontend/react-app/src/components/MeetingControls.tsx`: selected-meeting control bar and live timer. Symbols: `MeetingControls`, `formatDuration`.
-- `frontend/react-app/src/components/MeetingList.tsx`: meeting selector list. Symbols: `MeetingList`, `formatDate`, `statusClass`.
-- `frontend/react-app/src/components/PastMeetingsDashboard.tsx`: historical meeting dashboard. Symbols: `PastMeetingsDashboard`, `formatDate`, `formatDuration`.
-- `frontend/react-app/src/components/LiveTranscript.tsx`: transcript rendering panel. Symbols: `LiveTranscript`, `colorForSpeaker`.
-- `frontend/react-app/src/components/SummaryPanel.tsx`: summary rendering and regenerate action. Symbols: `SummaryPanel`.
-- `frontend/react-app/src/components/SearchBar.tsx`: semantic search UI with request cancellation. Symbols: `SearchBar`.
-- `frontend/react-app/src/components/RuntimeStatusPanel.tsx`: browser/backend/socket status UI. Symbols: `RuntimeStatusPanel`, `backendLabel`, `backendBadge`, `streamLabel`, `streamBadge`.
-- `frontend/react-app/src/components/ThemeSelector.tsx`: theme segmented control. Symbols: `ThemeSelector`, `OPTIONS`.
-- `frontend/react-app/src/components/icons.tsx`: reusable SVG icon primitives. Symbols: `IconBase`, `SunIcon`, `MoonIcon`, `DesktopIcon`, `PlayIcon`, `StopIcon`, `PlusIcon`, `SearchIcon`, `SparklesIcon`.
+- `frontend/src/main.tsx`: app bootstrap and initial theme resolution.
+- `frontend/src/App.tsx`: main UI orchestration, data loading, auth panel, workspace switching.
+- `frontend/src/index.css`: global design tokens, layout, and responsive styles.
+- `frontend/src/api/client.ts`: axios client and token helpers. Symbols: `getApiToken`, `setApiToken`, `clearApiToken`, `formatApiError`, `api`.
+- `frontend/src/types/models.ts`: shared API/UI types. Symbols: `MeetingLifecycleStatus`, `Meeting`, `Segment`, `Summary`, `MeetingStatus`, `SearchResult`.
+- `frontend/src/hooks/useTheme.ts`: theme persistence and system-theme tracking. Symbols: `ThemeMode`, `useTheme`, `readStoredMode`, `resolveTheme`.
+- `frontend/src/hooks/useLocalRuntime.ts`: browser/backend health probe. Symbols: `BackendReachability`, `useLocalRuntime`.
+- `frontend/src/hooks/useWebSocket.ts`: live transcript stream management. Symbols: `StreamConnectionState`, `useWebSocket`, `segmentKey`, `appendSegment`.
+- `frontend/src/components/MeetingControls.tsx`: selected-meeting control bar and live timer. Symbols: `MeetingControls`, `formatDuration`.
+- `frontend/src/components/MeetingList.tsx`: meeting selector list. Symbols: `MeetingList`, `formatDate`, `statusClass`.
+- `frontend/src/components/PastMeetingsDashboard.tsx`: historical meeting dashboard. Symbols: `PastMeetingsDashboard`, `formatDate`, `formatDuration`.
+- `frontend/src/components/LiveTranscript.tsx`: transcript rendering panel. Symbols: `LiveTranscript`, `colorForSpeaker`.
+- `frontend/src/components/SummaryPanel.tsx`: summary rendering and regenerate action. Symbols: `SummaryPanel`.
+- `frontend/src/components/SearchBar.tsx`: semantic search UI with request cancellation. Symbols: `SearchBar`.
+- `frontend/src/components/RuntimeStatusPanel.tsx`: browser/backend/socket status UI. Symbols: `RuntimeStatusPanel`, `backendLabel`, `backendBadge`, `streamLabel`, `streamBadge`.
+- `frontend/src/components/ThemeSelector.tsx`: theme segmented control. Symbols: `ThemeSelector`, `OPTIONS`.
+- `frontend/src/components/icons.tsx`: reusable SVG icon primitives. Symbols: `IconBase`, `SunIcon`, `MoonIcon`, `DesktopIcon`, `PlayIcon`, `StopIcon`, `PlusIcon`, `SearchIcon`, `SparklesIcon`.
 
 ## Frontend Build and Static Files
 
-- `frontend/react-app/index.html`: HTML shell and favicon reference.
-- `frontend/react-app/vite.config.ts`: loopback binding and backend proxy setup.
-- `frontend/react-app/package.json`: frontend package metadata and scripts.
-- `frontend/react-app/package-lock.json`: npm lockfile.
-- `frontend/react-app/tsconfig.json`: main TypeScript config.
-- `frontend/react-app/tsconfig.node.json`: TypeScript config for Vite/node-side files.
-- `frontend/react-app/public/parrot-script-logo.svg`: project logo asset.
+- `frontend/index.html`: HTML shell and favicon reference.
+- `frontend/vite.config.ts`: loopback binding and backend proxy setup.
+- `frontend/package.json`: frontend package metadata and scripts.
+- `frontend/package-lock.json`: npm lockfile.
+- `frontend/tsconfig.json`: main TypeScript config.
+- `frontend/tsconfig.node.json`: TypeScript config for Vite/node-side files.
+- `frontend/public/parrot-script-logo.svg`: project logo asset.
 
 ## Scripts
 
