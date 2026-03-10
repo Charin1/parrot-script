@@ -28,10 +28,10 @@ venv/
 *.log
 
 # Node / frontend
-frontend/react-app/node_modules/
-frontend/react-app/dist/
-frontend/react-app/.vite/
-frontend/react-app/.cache/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
 
 # Test coverage
 .coverage
