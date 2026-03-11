@@ -51,12 +51,24 @@ class AudioCapture:
                 logger.info("Resuming audio capture: appending to existing %s", self.record_to_file)
                 try:
                     with wave.open(str(self.record_to_file), 'rb') as old_wav:
-                        params = old_wav.getparams()
-                        old_frames = old_wav.readframes(old_wav.getnframes())
-                        self._start_offset_s = old_wav.getnframes() / old_wav.getframerate()
+                        old_nframes = old_wav.getnframes()
+                        old_rate = old_wav.getframerate()
+                        old_channels = old_wav.getnchannels()
+                        old_sampwidth = old_wav.getsampwidth()
+                        old_frames = old_wav.readframes(old_nframes)
+                        self._start_offset_s = old_nframes / old_rate
+                    logger.info(
+                        "Read %d old frames (%.1fs, %d bytes) from existing WAV",
+                        old_nframes, self._start_offset_s, len(old_frames)
+                    )
                     self._wav_file = wave.open(str(self.record_to_file), 'wb')
-                    self._wav_file.setparams(params)
+                    self._wav_file.setnchannels(old_channels)
+                    self._wav_file.setsampwidth(old_sampwidth)
+                    self._wav_file.setframerate(old_rate)
+                    # Do NOT call setnframes — leave at 0 so the wave module
+                    # calculates data length dynamically as frames are written.
                     self._wav_file.writeframes(old_frames)
+                    logger.info("Re-wrote old frames to WAV; file ready for appending")
                 except Exception as e:
                     logger.error("Failed to append to existing wav file: %s", e)
                     self._wav_file = wave.open(str(self.record_to_file), 'wb')
@@ -109,7 +121,12 @@ class AudioCapture:
 
         if self._wav_file:
             try:
+                nframes = self._wav_file.getnframes() if hasattr(self._wav_file, 'getnframes') else 'unknown'
+                logger.info("Closing WAV file. Frames written: %s", nframes)
                 self._wav_file.close()
+                if self.record_to_file:
+                    file_size = self.record_to_file.stat().st_size if self.record_to_file.exists() else 0
+                    logger.info("WAV file closed. Final size: %d bytes (%.1f KB)", file_size, file_size / 1024)
             except Exception as e:
                 logger.error("Failed to close wav file: %s", e)
             finally:

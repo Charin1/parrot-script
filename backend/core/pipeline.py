@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from typing import Optional
 from uuid import uuid4
@@ -18,6 +19,13 @@ from backend.storage.repositories.speakers import SpeakersRepository
 from backend.transcription.whisper_stream import WhisperTranscriber
 
 logger = logging.getLogger(__name__)
+
+# Shared executor for CPU-bound work (Whisper + Resemblyzer).
+# max_workers=4 allows 2-3 Whisper transcriptions + speaker embeddings in parallel.
+_cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pipeline-cpu")
+
+# Max number of chunks processed concurrently per pipeline.
+MAX_CONCURRENT_CHUNKS = 3
 
 
 class MeetingPipeline:
@@ -52,8 +60,8 @@ class MeetingPipeline:
         if existing_speakers:
             self.clusterer.speaker_count = len(existing_speakers)
 
-        await loop.run_in_executor(None, self.transcriber.load_model)
-        await loop.run_in_executor(None, self.clusterer.embedder.load)
+        await loop.run_in_executor(_cpu_executor, self.transcriber.load_model)
+        await loop.run_in_executor(_cpu_executor, self.clusterer.embedder.load)
 
         await self.capture.start()
         self.running = True
@@ -88,9 +96,41 @@ class MeetingPipeline:
             finally:
                 self._task = None
 
+        # Drain any remaining chunks sequentially (pipeline is stopping)
+        loop = asyncio.get_running_loop()
         while not self.capture.queue.empty():
             chunk = self.capture.queue.get_nowait()
-            await self._process_chunk(chunk)
+            try:
+                segments_future = loop.run_in_executor(
+                    _cpu_executor, self.transcriber.transcribe, chunk.data
+                )
+                speaker_future = loop.run_in_executor(
+                    _cpu_executor, self.clusterer.assign_speaker, chunk.data
+                )
+                segments, speaker = await asyncio.gather(segments_future, speaker_future)
+                if not segments:
+                    continue
+                for segment in segments:
+                    event = TranscriptSegmentEvent(
+                        meeting_id=self.meeting_id,
+                        speaker=speaker,
+                        text=segment.text,
+                        start_time=chunk.timestamp + segment.start,
+                        end_time=chunk.timestamp + segment.end,
+                        confidence=segment.confidence,
+                        segment_id=str(uuid4()),
+                    )
+                    await self.segments_repo.insert(event)
+                    await self.speakers_repo.upsert(self.meeting_id, speaker)
+                    await manager.broadcast(
+                        self.meeting_id,
+                        {
+                            "type": "transcript",
+                            "data": {"id": event.segment_id, **asdict(event)},
+                        },
+                    )
+            except Exception as exc:
+                logger.exception("Failed to drain chunk: %s", exc)
 
         await manager.broadcast(
             self.meeting_id,
@@ -108,59 +148,107 @@ class MeetingPipeline:
         )
 
     async def _process_loop(self) -> None:
+        """Main loop: process chunks concurrently but emit results in strict arrival order."""
+        # Completed results keyed by sequence number
+        results: dict[int, tuple] = {}   # seq -> (chunk, segments, speaker)
+        next_seq_to_emit = 0             # the next seq we must emit
+        seq_counter = 0                  # monotonically increasing per chunk
+        pending: dict[int, asyncio.Task] = {}  # seq -> processing task
+        results_ready = asyncio.Event()  # signalled when any result lands
+
+        async def _emit_ready():
+            """Emit results in strict sequence order."""
+            nonlocal next_seq_to_emit
+            while next_seq_to_emit in results:
+                chunk, segments, speaker = results.pop(next_seq_to_emit)
+                next_seq_to_emit += 1
+
+                if not segments:
+                    continue
+
+                for segment in segments:
+                    event = TranscriptSegmentEvent(
+                        meeting_id=self.meeting_id,
+                        speaker=speaker,
+                        text=segment.text,
+                        start_time=chunk.timestamp + segment.start,
+                        end_time=chunk.timestamp + segment.end,
+                        confidence=segment.confidence,
+                        segment_id=str(uuid4()),
+                    )
+                    await self.segments_repo.insert(event)
+                    await self.speakers_repo.upsert(self.meeting_id, speaker)
+                    await manager.broadcast(
+                        self.meeting_id,
+                        {
+                            "type": "transcript",
+                            "data": {
+                                "id": event.segment_id,
+                                **asdict(event),
+                            },
+                        },
+                    )
+
+                await manager.broadcast(
+                    self.meeting_id,
+                    {
+                        "type": "status",
+                        "data": asdict(
+                            MeetingStatusEvent(
+                                meeting_id=self.meeting_id,
+                                recording=True,
+                                speakers_detected=len(self.clusterer.unique_speakers),
+                                duration_s=max(0.0, time.time() - self.start_epoch),
+                            )
+                        ),
+                    },
+                )
+
+        async def _process_and_store(seq: int, chunk) -> None:
+            """Run Whisper + speaker embedding in parallel, store result."""
+            try:
+                loop = asyncio.get_running_loop()
+                segments_future = loop.run_in_executor(
+                    _cpu_executor, self.transcriber.transcribe, chunk.data
+                )
+                speaker_future = loop.run_in_executor(
+                    _cpu_executor, self.clusterer.assign_speaker, chunk.data
+                )
+                segments, speaker = await asyncio.gather(segments_future, speaker_future)
+                results[seq] = (chunk, segments, speaker)
+            except Exception as exc:
+                logger.exception("Failed to process audio chunk seq=%d: %s", seq, exc)
+                results[seq] = (chunk, [], "Unknown")
+            finally:
+                pending.pop(seq, None)
+                results_ready.set()
+
         while self.running:
             try:
-                chunk = await asyncio.wait_for(self.capture.queue.get(), timeout=1.0)
+                chunk = await asyncio.wait_for(self.capture.queue.get(), timeout=0.5)
             except asyncio.TimeoutError:
+                # Even on timeout, try to emit any ready results
+                await _emit_ready()
                 continue
 
-            try:
-                await self._process_chunk(chunk)
-            except Exception as exc:
-                logger.exception("Failed to process audio chunk: %s", exc)
+            # Limit concurrency: wait if too many in-flight
+            while len(pending) >= MAX_CONCURRENT_CHUNKS:
+                results_ready.clear()
+                await results_ready.wait()
+                await _emit_ready()
 
-    async def _process_chunk(self, chunk) -> None:
-        segments = await self.transcriber.transcribe_async(chunk.data)
-        if not segments:
-            return
+            seq = seq_counter
+            seq_counter += 1
+            task = asyncio.create_task(_process_and_store(seq, chunk))
+            pending[seq] = task
 
-        speaker = self.clusterer.assign_speaker(chunk.data)
+            # Try to emit any results that are ready
+            await _emit_ready()
 
-        for segment in segments:
-            event = TranscriptSegmentEvent(
-                meeting_id=self.meeting_id,
-                speaker=speaker,
-                text=segment.text,
-                start_time=chunk.timestamp + segment.start,
-                end_time=chunk.timestamp + segment.end,
-                confidence=segment.confidence,
-                segment_id=str(uuid4()),
-            )
+        # Wait for all in-flight tasks to finish
+        if pending:
+            await asyncio.gather(*pending.values(), return_exceptions=True)
+        # Emit any remaining results
+        await _emit_ready()
 
-            await self.segments_repo.insert(event)
-            await self.speakers_repo.upsert(self.meeting_id, speaker)
-            await manager.broadcast(
-                self.meeting_id,
-                {
-                    "type": "transcript",
-                    "data": {
-                        "id": event.segment_id,
-                        **asdict(event),
-                    },
-                },
-            )
 
-        await manager.broadcast(
-            self.meeting_id,
-            {
-                "type": "status",
-                "data": asdict(
-                    MeetingStatusEvent(
-                        meeting_id=self.meeting_id,
-                        recording=True,
-                        speakers_detected=len(self.clusterer.unique_speakers),
-                        duration_s=max(0.0, time.time() - self.start_epoch),
-                    )
-                ),
-            },
-        )

@@ -36,8 +36,6 @@ async def get_transcript(
         offset=start,
     )
     
-    logger.info("Serving %d segments. First few speakers: %s", len(segments), [s.get('speaker') for s in segments[:5]])
-    
     return {
         'items': segments,
         'page': page,

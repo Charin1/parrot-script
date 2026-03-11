@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any, Literal, Optional, AsyncGenerator
 from uuid import UUID
 
@@ -128,7 +129,10 @@ async def get_meeting_audio(meeting_id: UUID) -> FileResponse:
     return StreamingResponse(
         audio_generator(),
         media_type="audio/wav",
-        headers={"Accept-Ranges": "bytes"}
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        }
     )
 
 

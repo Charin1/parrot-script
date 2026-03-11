@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections import deque
 
 import numpy as np
@@ -18,36 +19,39 @@ class SpeakerClusterer:
         )
         self.labels: list[str] = []
         self.speaker_count: int = 0
+        self._lock = threading.Lock()
 
     def assign_speaker(self, audio_bytes: bytes) -> str:
+        # Compute embedding outside the lock (CPU-bound, safe to run concurrently)
         embedding = self.embedder.embed(audio_bytes)
 
-        if not self.embedding_history:
-            label = self._new_label()
-            self.embedding_history.append((label, embedding))
-            self.labels.append(label)
-            logger.info("First speaker detected: %s", label)
-            return label
+        with self._lock:
+            if not self.embedding_history:
+                label = self._new_label()
+                self.embedding_history.append((label, embedding))
+                self.labels.append(label)
+                logger.info("First speaker detected: %s", label)
+                return label
 
-        unique = self.unique_speakers
-        similarities = [
-            (label, self._cosine_similarity(embedding, self.get_centroid(label)))
-            for label in unique
-        ]
-        best_label, best_score = max(similarities, key=lambda item: item[1])
-        
-        logger.info("Speaker similarities: %s", similarities)
-        logger.info("Best match: %s with score %.3f (Threshold: %.3f)", best_label, best_score, settings.speaker_cluster_threshold)
+            unique = self.unique_speakers
+            similarities = [
+                (label, self._cosine_similarity(embedding, self.get_centroid(label)))
+                for label in unique
+            ]
+            best_label, best_score = max(similarities, key=lambda item: item[1])
+            
+            logger.info("Speaker similarities: %s", similarities)
+            logger.info("Best match: %s with score %.3f (Threshold: %.3f)", best_label, best_score, settings.speaker_cluster_threshold)
 
-        if best_score >= settings.speaker_cluster_threshold or len(unique) >= settings.max_speakers:
-            assigned = best_label
-        else:
-            assigned = self._new_label()
+            if best_score >= settings.speaker_cluster_threshold or len(unique) >= settings.max_speakers:
+                assigned = best_label
+            else:
+                assigned = self._new_label()
 
-        self.embedding_history.append((assigned, embedding))
-        self.labels.append(assigned)
-        logger.info("Assigned chunk to %s", assigned)
-        return assigned
+            self.embedding_history.append((assigned, embedding))
+            self.labels.append(assigned)
+            logger.info("Assigned chunk to %s", assigned)
+            return assigned
 
     def get_centroid(self, label: str) -> np.ndarray:
         matches = [embedding for current_label, embedding in self.embedding_history if current_label == label]
@@ -56,9 +60,10 @@ class SpeakerClusterer:
         return np.mean(np.stack(matches), axis=0)
 
     def reset(self, initial_speaker_count: int = 0) -> None:
-        self.embedding_history.clear()
-        self.labels.clear()
-        self.speaker_count = initial_speaker_count
+        with self._lock:
+            self.embedding_history.clear()
+            self.labels.clear()
+            self.speaker_count = initial_speaker_count
 
     @property
     def unique_speakers(self) -> list[str]:

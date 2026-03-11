@@ -166,8 +166,12 @@ export const api = {
 
   getAudioUrl(meetingId: string): string {
     const token = getApiToken()
+    const cacheBust = Date.now()
     const url = `/api/meetings/${meetingId}/audio`
-    return token ? `${url}?token=${encodeURIComponent(token)}` : url
+    const params = new URLSearchParams()
+    if (token) params.set('token', token)
+    params.set('_t', String(cacheBust))
+    return `${url}?${params.toString()}`
   },
 }
 

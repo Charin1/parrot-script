@@ -24,6 +24,10 @@ function appendSegment(prev: Segment[], incoming: Segment): Segment[] {
   }
 
   const next = [...prev, incoming]
+
+  // Sort by start_time so parallel-processed chunks always appear in chronological order
+  next.sort((a, b) => a.start_time - b.start_time)
+
   if (next.length <= MAX_SEGMENTS) {
     return next
   }
