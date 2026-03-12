@@ -1,9 +1,10 @@
 import type { Meeting } from '../types/models'
-import { SearchIcon } from './icons'
+import { SearchIcon, TrashIcon } from './icons'
 
 interface Props {
   meetings: Meeting[]
   onOpenMeeting: (meetingId: string) => void
+  onDeleteMeeting: (meetingId: string) => void
 }
 
 function formatDate(value: string): string {
@@ -19,7 +20,7 @@ function formatDuration(seconds: number | null): string {
   return `${mins}m ${secs}s`
 }
 
-export function PastMeetingsDashboard({ meetings, onOpenMeeting }: Props) {
+export function PastMeetingsDashboard({ meetings, onOpenMeeting, onDeleteMeeting }: Props) {
   const pastMeetings = meetings.filter((meeting) => meeting.status === 'completed' || meeting.status === 'failed')
 
   const completedCount = pastMeetings.filter((meeting) => meeting.status === 'completed').length
@@ -75,6 +76,17 @@ export function PastMeetingsDashboard({ meetings, onOpenMeeting }: Props) {
                 <button type="button" className="secondary" onClick={() => onOpenMeeting(meeting.id)}>
                   <SearchIcon className="btn-icon" width={14} height={14} />
                   <span>Open</span>
+                </button>
+                <button
+                  type="button"
+                  className="secondary btn-danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteMeeting(meeting.id);
+                  }}
+                  title="Delete Meeting"
+                >
+                  <TrashIcon className="btn-icon" width={14} height={14} />
                 </button>
               </div>
             </article>

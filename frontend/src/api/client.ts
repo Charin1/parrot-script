@@ -164,6 +164,10 @@ export const api = {
     return data
   },
 
+  async deleteMeeting(id: string): Promise<void> {
+    await client.delete(`/meetings/${id}`)
+  },
+
   getAudioUrl(meetingId: string): string {
     const token = getApiToken()
     const cacheBust = Date.now()

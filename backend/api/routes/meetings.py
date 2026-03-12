@@ -150,21 +150,28 @@ async def update_meeting(meeting_id: UUID, body: UpdateMeetingRequest) -> dict[s
 @router.delete('/{meeting_id}')
 async def delete_meeting(meeting_id: UUID) -> dict[str, bool]:
     meeting_id_str = str(meeting_id)
+    logger.info("Received request to delete meeting: %s", meeting_id_str)
 
     pipeline = active_pipelines.pop(meeting_id_str, None)
     if pipeline is not None:
+        logger.info("Stopping active pipeline for meeting: %s", meeting_id_str)
         await pipeline.stop()
 
     task = _pipeline_start_tasks.pop(meeting_id_str, None)
     if task is not None and not task.done():
+        logger.info("Cancelling pipeline start task for meeting: %s", meeting_id_str)
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
     removed = await meetings_repo.delete(meeting_id_str)
     if not removed:
+        logger.warning("Delete failed: Meeting not found: %s", meeting_id_str)
         raise HTTPException(status_code=404, detail='Meeting not found')
+    
+    logger.info("Meeting deleted successfully: %s", meeting_id_str)
     return {'deleted': True}
+
 
 
 @router.post('/{meeting_id}/start')

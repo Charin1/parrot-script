@@ -1,9 +1,10 @@
-from __future__ import annotations
-
+import logging
 from typing import Optional
 from uuid import uuid4
 
 from backend.storage.db import get_db
+
+logger = logging.getLogger(__name__)
 
 
 class MeetingsRepository:
@@ -71,19 +72,46 @@ class MeetingsRepository:
         return updated
 
     async def delete(self, meeting_id: str) -> bool:
+        from pathlib import Path
+        from backend.config import settings
+        import os
+
+        logger.info("Attempting to delete meeting: %s", meeting_id)
         db = await get_db()
         try:
+            # Delete related records
             await db.execute("DELETE FROM transcript_segments WHERE meeting_id = ?", (meeting_id,))
             await db.execute("DELETE FROM summaries WHERE meeting_id = ?", (meeting_id,))
             await db.execute("DELETE FROM speakers WHERE meeting_id = ?", (meeting_id,))
+            
+            # Delete meeting record
             cur = await db.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
             await db.commit()
-            return cur.rowcount > 0
-        except Exception:
+            
+            removed = cur.rowcount > 0
+            if removed:
+                logger.info("Deleted database records for meeting: %s", meeting_id)
+                audio_path = Path(settings.db_path).parent / f"{meeting_id}.wav"
+                if audio_path.exists():
+                    try:
+                        os.remove(audio_path)
+                        logger.info("Deleted audio file for meeting %s: %s", meeting_id, audio_path)
+                    except Exception as e:
+                        logger.error("Failed to delete audio file for meeting %s at %s: %s", meeting_id, audio_path, e)
+                else:
+                    logger.debug("No audio file found for meeting %s at %s", meeting_id, audio_path)
+            else:
+                logger.warning("Meeting not found in database for deletion: %s", meeting_id)
+            
+            return removed
+        except Exception as e:
+            logger.exception("Error during meeting deletion for %s: %s", meeting_id, e)
             await db.rollback()
             raise
         finally:
             await db.close()
+
+
 
     async def end_meeting(self, meeting_id: str, duration_s: float) -> dict:
         db = await get_db()

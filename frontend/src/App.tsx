@@ -176,6 +176,26 @@ function App() {
     })
   }
 
+  const deleteMeeting = async (id: string) => {
+    const meeting = meetings.find(m => m.id === id)
+    const title = meeting?.title || 'this meeting'
+    
+    if (!window.confirm(`Are you sure you want to permanently delete "${title}"? This will remove all transcripts and the audio recording.`)) {
+      return
+    }
+
+    await runBusy(async () => {
+      await api.deleteMeeting(id)
+      if (selectedMeetingId === id) {
+        setSelectedMeetingId(null)
+        setSummary(null)
+        setSegments([])
+      }
+      await refreshMeetings()
+    })
+  }
+
+
   const saveApiToken = async () => {
     const cleanToken = apiTokenInput.trim()
 
@@ -329,7 +349,9 @@ function App() {
               setSelectedMeetingId(meetingId)
               setViewMode('workspace')
             }}
+            onDeleteMeeting={deleteMeeting}
           />
+
         ) : (
           <>
             <MeetingControls
