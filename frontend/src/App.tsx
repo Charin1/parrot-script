@@ -38,8 +38,13 @@ function App() {
     activeApiToken,
   )
 
-  const refreshMeetings = useCallback(async (signal?: AbortSignal) => {
-    const list = await api.listMeetings(signal)
+  const refreshMeetings = useCallback(async (signal?: AbortSignal, filters?: {
+    q?: string
+    status?: string
+    from_date?: string
+    to_date?: string
+  }) => {
+    const list = await api.listMeetings(signal, filters)
     setMeetings(list)
     setSelectedMeetingId((current) => {
       if (current && list.some((meeting) => meeting.id === current)) {
@@ -48,6 +53,16 @@ function App() {
       return list.length > 0 ? list[0].id : null
     })
   }, [])
+
+  const handleDashboardFiltersChange = useCallback((filters: {
+    q?: string
+    status?: string
+    from_date?: string
+    to_date?: string
+  }) => {
+    void refreshMeetings(undefined, filters)
+  }, [refreshMeetings])
+
 
   useEffect(() => {
     if (!authReady) {
@@ -350,6 +365,7 @@ function App() {
               setViewMode('workspace')
             }}
             onDeleteMeeting={deleteMeeting}
+            onFiltersChange={handleDashboardFiltersChange}
           />
 
         ) : (

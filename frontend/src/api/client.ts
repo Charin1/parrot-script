@@ -66,8 +66,18 @@ export const api = {
     return data
   },
 
-  async listMeetings(signal?: AbortSignal): Promise<Meeting[]> {
-    const { data } = await client.get<Meeting[]>('/meetings/', { signal })
+  async listMeetings(signal?: AbortSignal, filters?: {
+    q?: string
+    status?: string
+    from_date?: string
+    to_date?: string
+  }): Promise<Meeting[]> {
+    const params: Record<string, string> = {}
+    if (filters?.q) params.q = filters.q
+    if (filters?.status) params.status = filters.status
+    if (filters?.from_date) params.from_date = filters.from_date
+    if (filters?.to_date) params.to_date = filters.to_date
+    const { data } = await client.get<Meeting[]>('/meetings/', { signal, params })
     return data
   },
 

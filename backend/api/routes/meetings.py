@@ -92,8 +92,13 @@ async def create_meeting(body: CreateMeetingRequest) -> dict[str, Any]:
 
 
 @router.get('/')
-async def list_meetings() -> list[dict[str, Any]]:
-    return await meetings_repo.list_all()
+async def list_meetings(
+    q: Optional[str] = Query(default=None, description='Keyword search on title'),
+    status: Optional[str] = Query(default=None, description='Filter by status: active, recording, completed, failed'),
+    from_date: Optional[str] = Query(default=None, description='ISO datetime lower bound for created_at'),
+    to_date: Optional[str] = Query(default=None, description='ISO datetime upper bound for created_at'),
+) -> list[dict[str, Any]]:
+    return await meetings_repo.list_all(q=q, status=status, from_date=from_date, to_date=to_date)
 
 
 @router.get('/{meeting_id}')

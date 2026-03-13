@@ -33,12 +33,35 @@ class MeetingsRepository:
         finally:
             await db.close()
 
-    async def list_all(self) -> list[dict]:
+    async def list_all(
+        self,
+        q: Optional[str] = None,
+        status: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> list[dict]:
+        conditions: list[str] = []
+        params: list[object] = []
+
+        if q:
+            conditions.append("title LIKE ?")
+            params.append(f"%{q}%")
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        if from_date:
+            conditions.append("created_at >= ?")
+            params.append(from_date)
+        if to_date:
+            conditions.append("created_at <= ?")
+            params.append(to_date)
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM meetings {where_clause} ORDER BY created_at DESC"
+
         db = await get_db()
         try:
-            async with db.execute(
-                "SELECT * FROM meetings ORDER BY created_at DESC"
-            ) as cur:
+            async with db.execute(sql, params) as cur:
                 rows = await cur.fetchall()
                 return [dict(row) for row in rows]
         finally:
