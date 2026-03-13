@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getApiToken } from '../api/client'
+import { getApiToken, getBackendOrigin } from '../api/client'
 import type { MeetingStatus, Segment } from '../types/models'
 
 const MAX_SEGMENTS = 2000
@@ -44,11 +44,14 @@ export function useWebSocket(meetingId: string | null, apiToken: string) {
       return null
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const host = window.location.host || '127.0.0.1:8000'
+    const backendOrigin = new URL(getBackendOrigin())
+    const protocol = backendOrigin.protocol === 'https:' ? 'wss:' : 'ws:'
     const token = apiToken.trim() || getApiToken()
-    const search = token ? `?token=${encodeURIComponent(token)}` : ''
-    return `${protocol}://${host}/ws/meetings/${meetingId}${search}`
+    const socketUrl = new URL(`/ws/meetings/${meetingId}`, `${protocol}//${backendOrigin.host}`)
+    if (token) {
+      socketUrl.searchParams.set('token', token)
+    }
+    return socketUrl.toString()
   }, [meetingId, apiToken])
 
   useEffect(() => {

@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
-from backend.api.auth import verify_http_request, verify_websocket_request
+from backend.api.auth import auth_enabled, verify_http_request, verify_websocket_request
 from backend.api.routes.meetings import router as meetings_router
 from backend.api.routes.search import router as search_router
 from backend.api.routes.summaries import router as summaries_router
@@ -45,6 +45,7 @@ app = FastAPI(title="Parrot Script", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -56,8 +57,8 @@ app.include_router(search_router)
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, Any]:
+    return {"status": "ok", "auth_required": auth_enabled()}
 
 
 @app.get("/preflight")
@@ -94,7 +95,9 @@ async def security_headers(request: Request, call_next) -> Response:
 
 @app.websocket("/ws/meetings/{meeting_id}")
 async def websocket_endpoint(websocket: WebSocket, meeting_id: str):
-    await verify_websocket_request(websocket)
+    authorized = await verify_websocket_request(websocket)
+    if not authorized:
+        return
     await manager.connect(websocket, meeting_id)
     try:
         while True:

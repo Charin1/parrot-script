@@ -50,7 +50,7 @@ from backend.core.export import generate_transcript_pdf
 @router.get('/{meeting_id}/transcript/download')
 async def download_transcript(
     meeting_id: UUID,
-    format: str = Query('json', regex='^(json|pdf)$')
+    format: str = Query('json', pattern='^(json|pdf)$')
 ) -> Response:
     meeting_id_str = str(meeting_id)
     meeting = await meetings_repo.get(meeting_id_str)

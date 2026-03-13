@@ -6,6 +6,7 @@ import { AudioPlayer } from './AudioPlayer'
 
 interface Props {
   segments: Segment[]
+  meetingId: string | null
 }
 
 function colorForSpeaker(speaker: string): string {
@@ -14,7 +15,21 @@ function colorForSpeaker(speaker: string): string {
   return palette[value % palette.length]
 }
 
-export function LiveTranscript({ segments }: Props) {
+function latestStartedSegmentIndex(segments: Array<{ start_time: number }>, currentTime: number): number {
+  if (currentTime <= 0) {
+    return -1
+  }
+
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    if (currentTime >= segments[index].start_time) {
+      return index
+    }
+  }
+
+  return -1
+}
+
+export function LiveTranscript({ segments, meetingId }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [editingSegmentKey, setEditingSegmentKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -27,25 +42,29 @@ export function LiveTranscript({ segments }: Props) {
   const [autoScroll, setAutoScroll] = useState(true)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  const currentMeetingId = segments.length > 0 ? segments[0].meeting_id : null;
+  const audioSrc = useMemo(
+    () => meetingId ? api.getAudioUrl(meetingId) : '',
+    [meetingId]
+  )
 
   useEffect(() => {
     if (!containerRef.current) return
-    if (autoScroll && currentMeetingId) {
+    if (autoScroll && meetingId) {
       if (currentTime === 0) {
         containerRef.current.scrollTop = containerRef.current.scrollHeight
       }
     }
-  }, [segments, autoScroll, currentMeetingId, currentTime])
+  }, [segments, autoScroll, meetingId, currentTime])
 
   useEffect(() => {
-    setOptimisticNames({});
-    setOptimisticBookmarks({});
-    setOptimisticTexts({});
-    setEditingSegmentKey(null);
-    setEditingTextKey(null);
-    setCurrentTime(0);
-  }, [currentMeetingId]);
+    setOptimisticNames({})
+    setOptimisticBookmarks({})
+    setOptimisticTexts({})
+    setEditingSegmentKey(null)
+    setEditingTextKey(null)
+    setCurrentTime(0)
+    setAutoScroll(true)
+  }, [meetingId])
 
   const grouped = useMemo(() => {
     return segments.map((segment) => ({
@@ -56,6 +75,49 @@ export function LiveTranscript({ segments }: Props) {
       isBookmarked: optimisticBookmarks[segment.id ?? segment.segment_id ?? ''] ?? segment.is_bookmarked ?? false
     }))
   }, [segments, optimisticNames, optimisticBookmarks, optimisticTexts])
+
+  const scrollKeyForPlaybackTime = (playbackTime: number): string | null => {
+    if (playbackTime <= 0) {
+      return null
+    }
+
+    const segmentIndex = latestStartedSegmentIndex(grouped, playbackTime)
+    if (segmentIndex >= 0) {
+      return grouped[segmentIndex].key
+    }
+
+    return grouped[0]?.key ?? null
+  }
+
+  const scrollToSegment = (segmentKey: string | null, behavior: ScrollBehavior = 'smooth'): boolean => {
+    const container = containerRef.current
+    if (!container || !segmentKey) {
+      return false
+    }
+
+    const element = document.getElementById(`segment-${segmentKey}`)
+    if (!element) {
+      return false
+    }
+
+    const containerRect = container.getBoundingClientRect()
+    const elementRect = element.getBoundingClientRect()
+    const nextTop =
+      container.scrollTop +
+      (elementRect.top - containerRect.top) -
+      (container.clientHeight / 2) +
+      (elementRect.height / 2)
+
+    container.scrollTo({
+      top: Math.max(0, nextTop),
+      behavior,
+    })
+    return true
+  }
+
+  const scrollToPlaybackPosition = (playbackTime: number, behavior: ScrollBehavior = 'smooth'): boolean => {
+    return scrollToSegment(scrollKeyForPlaybackTime(playbackTime), behavior)
+  }
 
   const startEditing = (segmentKey: string, currentDisplay: string) => {
     setEditingSegmentKey(segmentKey)
@@ -101,25 +163,32 @@ export function LiveTranscript({ segments }: Props) {
   const seekAudio = (time: number) => {
     if (audioRef.current) {
       audioRef.current.currentTime = time
+      setCurrentTime(time)
+      setAutoScroll(true)
       void audioRef.current.play().catch(() => { /* user interaction required */ })
     }
   }
 
-  const activeSegmentIdx = currentTime > 0 ? grouped.findIndex(s => currentTime >= s.start_time && currentTime <= s.end_time) : -1
-  const activeKey = activeSegmentIdx >= 0 ? grouped[activeSegmentIdx].key : null
+  const playbackSegmentIdx = latestStartedSegmentIndex(grouped, currentTime)
+  const activeSegmentIdx =
+    playbackSegmentIdx >= 0 && currentTime <= grouped[playbackSegmentIdx].end_time
+      ? playbackSegmentIdx
+      : -1
 
   useEffect(() => {
     if (!containerRef.current) return
-    if (autoScroll) {
-      if (activeKey) {
-        // smooth scroll inside container to track active segment
-        document.getElementById(`segment-${activeKey}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      } else {
-        // if no active segment (e.g. currentTime=0 on live call), track the live tail
-        containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' })
-      }
+    if (!autoScroll) {
+      return
     }
-  }, [segments, autoScroll, activeKey])
+
+    const playbackTime = audioRef.current?.currentTime ?? currentTime
+    if (playbackTime > 0) {
+      scrollToPlaybackPosition(playbackTime)
+      return
+    }
+
+    containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' })
+  }, [autoScroll, currentTime, grouped, segments.length])
 
   const handleUserScroll = () => {
     if (autoScroll) setAutoScroll(false)
@@ -130,12 +199,12 @@ export function LiveTranscript({ segments }: Props) {
       <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <h3 style={{ margin: 0, minWidth: '150px' }}>Live Transcript</h3>
 
-        {currentMeetingId && (
+        {meetingId && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap', flex: 1, justifyContent: 'flex-end' }}>
             {/* Custom Audio Player */}
             <AudioPlayer
               ref={audioRef}
-              src={api.getAudioUrl(currentMeetingId)}
+              src={audioSrc}
               onTimeUpdate={setCurrentTime}
               maxDuration={segments.length > 0 ? segments[segments.length - 1].end_time : 0}
             />
@@ -146,7 +215,7 @@ export function LiveTranscript({ segments }: Props) {
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => void api.downloadAudio(currentMeetingId)}
+                  onClick={() => void api.downloadAudio(meetingId)}
                   title="Download Audio"
                 >
                   <DownloadIcon className="btn-icon" width={14} height={14} />
@@ -155,7 +224,7 @@ export function LiveTranscript({ segments }: Props) {
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => void api.downloadTranscript(currentMeetingId, 'json')}
+                  onClick={() => void api.downloadTranscript(meetingId, 'json')}
                   title="Download JSON"
                 >
                   <DownloadIcon className="btn-icon" width={14} height={14} />
@@ -164,7 +233,7 @@ export function LiveTranscript({ segments }: Props) {
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => void api.downloadTranscript(currentMeetingId, 'pdf')}
+                  onClick={() => void api.downloadTranscript(meetingId, 'pdf')}
                   title="Download PDF"
                 >
                   <DownloadIcon className="btn-icon" width={14} height={14} />
@@ -182,15 +251,17 @@ export function LiveTranscript({ segments }: Props) {
         onTouchMove={handleUserScroll}
         style={{ position: 'relative' }}
       >
-        {!autoScroll && segments.length > 0 && currentMeetingId && (
+        {!autoScroll && segments.length > 0 && meetingId && (
           <div style={{ position: 'sticky', top: '10px', display: 'flex', justifyContent: 'center', zIndex: 100, pointerEvents: 'none' }}>
             <button
               className="sync-btn"
               style={{ pointerEvents: 'auto' }}
               onClick={() => {
+                const playbackTime = audioRef.current?.currentTime ?? currentTime
+                setCurrentTime(playbackTime)
                 setAutoScroll(true)
-                if (activeKey) {
-                  document.getElementById(`segment-${activeKey}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                if (playbackTime > 0) {
+                  scrollToPlaybackPosition(playbackTime)
                 } else if (containerRef.current) {
                   containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' })
                 }

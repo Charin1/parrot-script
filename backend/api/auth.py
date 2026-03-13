@@ -38,7 +38,8 @@ async def verify_http_request(request: Request) -> Response | None:
     if request.method == "OPTIONS":
         return None
 
-    if not auth_enabled() or request.url.path in PUBLIC_PATHS:
+    normalized_path = request.url.path.rstrip("/")
+    if not auth_enabled() or normalized_path in PUBLIC_PATHS:
         return None
 
     header_token = extract_bearer_token(request.headers.get("Authorization"))
@@ -52,13 +53,16 @@ async def verify_http_request(request: Request) -> Response | None:
     return None
 
 
-async def verify_websocket_request(websocket: WebSocket) -> None:
+async def verify_websocket_request(websocket: WebSocket) -> bool:
     if not auth_enabled():
-        return
+        return True
 
     header_token = extract_bearer_token(websocket.headers.get("authorization"))
     query_token = websocket.query_params.get("token")
     if token_valid(header_token) or token_valid(query_token):
-        return
+        return True
 
+    # Accept before closing so browser clients receive the explicit 4401 close code.
+    await websocket.accept()
     await websocket.close(code=4401, reason="Unauthorized")
+    return False

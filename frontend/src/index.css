@@ -994,3 +994,52 @@ code {
   filter: none;
   box-shadow: none;
 }
+
+.custom-audio-player .volume-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.custom-audio-player .volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 64px;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+  border: none;
+}
+
+.custom-audio-player .volume-slider::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(to right, var(--accent-strong) 0%, var(--accent-strong) var(--vol), color-mix(in srgb, var(--accent) 15%, var(--border)) var(--vol), color-mix(in srgb, var(--accent) 15%, var(--border)) 100%);
+  border-radius: 999px;
+}
+
+.custom-audio-player .volume-slider::-moz-range-track {
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(to right, var(--accent-strong) 0%, var(--accent-strong) var(--vol), color-mix(in srgb, var(--accent) 15%, var(--border)) var(--vol), color-mix(in srgb, var(--accent) 15%, var(--border)) 100%);
+  border-radius: 999px;
+}
+
+.custom-audio-player .volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  margin-top: -4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  transition: transform 0.1s;
+  cursor: grab;
+}
+
+.custom-audio-player .volume-slider:active::-webkit-slider-thumb {
+  transform: scale(1.2);
+  cursor: grabbing;
+}

@@ -2,9 +2,45 @@ import axios, { AxiosError } from 'axios'
 import type { Meeting, SearchResult, Segment, Summary } from '../types/models'
 
 const API_TOKEN_STORAGE_KEY = 'parrot-script-api-token'
+const DEFAULT_BACKEND_PORT = '8000'
+const DEFAULT_BACKEND_PROTOCOL = 'http:'
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '')
+}
+
+export function getBackendOrigin(): string {
+  const configured = import.meta.env.VITE_BACKEND_ORIGIN?.trim()
+  if (configured) {
+    return trimTrailingSlash(configured)
+  }
+
+  const defaultOrigin = `${DEFAULT_BACKEND_PROTOCOL}//127.0.0.1:${DEFAULT_BACKEND_PORT}`
+  if (typeof window === 'undefined') {
+    return defaultOrigin
+  }
+
+  const { protocol, hostname, port, origin } = window.location
+  const isHttp = protocol === 'http:' || protocol === 'https:'
+  const isLoopback = hostname === '127.0.0.1' || hostname === 'localhost'
+  if (!isHttp) {
+    return defaultOrigin
+  }
+  if (isLoopback && port === DEFAULT_BACKEND_PORT) {
+    return trimTrailingSlash(origin)
+  }
+  if (isLoopback) {
+    return `${protocol}//${hostname}:${DEFAULT_BACKEND_PORT}`
+  }
+  return defaultOrigin
+}
+
+export function buildBackendUrl(path: string): string {
+  return new URL(path, `${getBackendOrigin()}/`).toString()
+}
 
 const client = axios.create({
-  baseURL: '/api',
+  baseURL: buildBackendUrl('/api'),
   timeout: 30000,
   headers: {
     'X-Requested-With': 'ParrotScriptClient',
@@ -46,7 +82,7 @@ export function formatApiError(error: unknown): string {
       return 'Local backend timed out. Check that Parrot Script is still running.'
     }
     if (!error.response && error.code === 'ERR_NETWORK') {
-      return 'Cannot reach the local backend at 127.0.0.1:8000.'
+      return `Cannot reach the local backend at ${getBackendOrigin()}.`
     }
     const detail = (error.response?.data as { detail?: string } | undefined)?.detail
     if (typeof detail === 'string' && detail.trim()) {
@@ -181,11 +217,12 @@ export const api = {
   getAudioUrl(meetingId: string): string {
     const token = getApiToken()
     const cacheBust = Date.now()
-    const url = `/api/meetings/${meetingId}/audio`
-    const params = new URLSearchParams()
-    if (token) params.set('token', token)
-    params.set('_t', String(cacheBust))
-    return `${url}?${params.toString()}`
+    const url = new URL(`/api/meetings/${meetingId}/audio`, `${getBackendOrigin()}/`)
+    if (token) {
+      url.searchParams.set('token', token)
+    }
+    url.searchParams.set('_t', String(cacheBust))
+    return url.toString()
   },
 }
 

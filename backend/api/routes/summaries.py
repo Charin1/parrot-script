@@ -97,7 +97,7 @@ from backend.core.export import generate_summary_pdf
 @router.get('/{meeting_id}/summary/download')
 async def download_summary(
     meeting_id: UUID,
-    format: str = Query('json', regex='^(json|pdf)$')
+    format: str = Query('json', pattern='^(json|pdf)$')
 ) -> Response:
     meeting_id_str = str(meeting_id)
     meeting = await meetings_repo.get(meeting_id_str)

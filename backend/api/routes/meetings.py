@@ -7,8 +7,9 @@ import time
 from typing import Any, Literal, Optional, AsyncGenerator
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
+
 from pydantic import BaseModel, Field, field_validator
 import aiofiles
 from pathlib import Path
@@ -110,35 +111,76 @@ async def get_meeting(meeting_id: UUID) -> dict[str, Any]:
 
 
 @router.get('/{meeting_id}/audio')
-async def get_meeting_audio(meeting_id: UUID) -> FileResponse:
+async def get_meeting_audio(meeting_id: UUID, request: Request) -> Response:
     meeting_id_str = str(meeting_id)
     meeting = await meetings_repo.get(meeting_id_str)
     if meeting is None:
         raise HTTPException(status_code=404, detail='Meeting not found')
-        
+
     audio_path = Path(settings.db_path).parent / f"{meeting_id_str}.wav"
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail='Audio not found for this meeting')
-        
-    async def audio_generator() -> AsyncGenerator[bytes, None]:
+
+    file_size = audio_path.stat().st_size
+    range_header = request.headers.get('range')
+
+    if range_header:
+        # Parse "bytes=start-end"
+        try:
+            range_val = range_header.strip().replace('bytes=', '')
+            range_start_str, range_end_str = range_val.split('-')
+            range_start = int(range_start_str) if range_start_str else 0
+            range_end = int(range_end_str) if range_end_str else file_size - 1
+        except (ValueError, AttributeError):
+            range_start = 0
+            range_end = file_size - 1
+
+        range_start = max(0, range_start)
+        range_end = min(range_end, file_size - 1)
+        content_length = range_end - range_start + 1
+
+        async def range_generator() -> AsyncGenerator[bytes, None]:
+            async with aiofiles.open(audio_path, 'rb') as f:
+                await f.seek(range_start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk = await f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(
+            range_generator(),
+            status_code=206,
+            media_type='audio/wav',
+            headers={
+                'Content-Range': f'bytes {range_start}-{range_end}/{file_size}',
+                'Content-Length': str(content_length),
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'no-store',
+            },
+        )
+
+    # No Range header: return full file
+    async def full_generator() -> AsyncGenerator[bytes, None]:
         async with aiofiles.open(audio_path, 'rb') as f:
             while True:
                 chunk = await f.read(65536)
                 if not chunk:
-                    # If the meeting is still recording, we shouldn't necessarily close the stream,
-                    # but for HTTP GET, standard behavior is to end when EOF is hit. 
-                    # The client audio player will just request range again if needed.
                     break
                 yield chunk
 
     return StreamingResponse(
-        audio_generator(),
-        media_type="audio/wav",
+        full_generator(),
+        media_type='audio/wav',
         headers={
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        }
+            'Content-Length': str(file_size),
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'no-store',
+        },
     )
+
 
 
 @router.patch('/{meeting_id}')

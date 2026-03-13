@@ -24,9 +24,18 @@ function App() {
   const [activeApiToken, setActiveApiToken] = useState(() => getApiToken())
   const [viewMode, setViewMode] = useState<'workspace' | 'dashboard'>('workspace')
   const { mode, resolved, setMode } = useTheme()
-  const { browserOnline, backendReachability } = useLocalRuntime()
+  const { browserOnline, backendReachability, authRequired } = useLocalRuntime()
   const previousBackendReachability = useRef(backendReachability)
-  const authReady = activeApiToken.trim().length > 0
+  const hasApiToken = activeApiToken.trim().length > 0
+  const authReady = authRequired === false || hasApiToken
+  const authBadgeClass =
+    authRequired === null ? 'badge-idle' : authReady ? 'badge-ok' : 'badge-failed'
+  const authBadgeLabel =
+    authRequired === null ? 'Checking Auth' : authRequired ? (hasApiToken ? 'Token Loaded' : 'Token Required') : 'Token Optional'
+  const authDescription =
+    authRequired === false
+      ? 'Backend auth is disabled right now. You can leave the token blank unless you enable API_TOKEN again.'
+      : 'The local API expects a shared token. It stays in this browser and is attached to API and live stream requests.'
 
   const selectedMeeting = useMemo(
     () => meetings.find((meeting) => meeting.id === selectedMeetingId) ?? null,
@@ -217,11 +226,13 @@ function App() {
     if (!cleanToken) {
       setApiToken('')
       setActiveApiToken('')
-      setMeetings([])
-      setSelectedMeetingId(null)
-      setSummary(null)
-      setSegments([])
       setAppError(null)
+      if (authRequired !== false) {
+        setMeetings([])
+        setSelectedMeetingId(null)
+        setSummary(null)
+        setSegments([])
+      }
       return
     }
 
@@ -243,11 +254,14 @@ function App() {
     clearApiToken()
     setApiTokenInput('')
     setActiveApiToken('')
-    setMeetings([])
-    setSelectedMeetingId(null)
-    setSummary(null)
-    setSegments([])
     setAppError(null)
+
+    if (authRequired !== false) {
+      setMeetings([])
+      setSelectedMeetingId(null)
+      setSummary(null)
+      setSegments([])
+    }
   }
 
   return (
@@ -274,13 +288,12 @@ function App() {
         <div className="panel security-panel">
           <div className="panel-header">
             <h3>Local API Security</h3>
-            <span className={`badge ${authReady ? 'badge-ok' : 'badge-failed'}`}>
-              {authReady ? 'Token Loaded' : 'Token Missing'}
+            <span className={`badge ${authBadgeClass}`}>
+              {authBadgeLabel}
             </span>
           </div>
           <p className="muted">
-            The local API expects a shared token. It stays in this browser and is attached to API
-            and live stream requests.
+            {authDescription}
           </p>
           <div className="security-form">
             <input
@@ -382,7 +395,7 @@ function App() {
                 <strong>{Math.round(status.duration_s)}s</strong>
               </div>
             ) : null}
-            <LiveTranscript segments={segments} />
+            <LiveTranscript segments={segments} meetingId={selectedMeetingId} />
             <SummaryPanel
               summary={summary}
               onGenerate={generateSummary}

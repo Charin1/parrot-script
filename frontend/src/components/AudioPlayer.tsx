@@ -18,6 +18,14 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src
     const [volume, setVolume] = useState(1)
     const [loading, setLoading] = useState(true)
 
+    // Reset state whenever the source changes
+    useEffect(() => {
+        setIsPlaying(false)
+        setCurrentTime(0)
+        setDuration(0)
+        setLoading(true)
+    }, [src])
+
     useEffect(() => {
         const audio = audioRef.current
         if (!audio) return
@@ -33,7 +41,10 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src
             if (onTimeUpdate) onTimeUpdate(audio.currentTime)
         }
 
-        const onPlay = () => setIsPlaying(true)
+        const onPlay = () => {
+            setIsPlaying(true)
+            if (onTimeUpdate) onTimeUpdate(audio.currentTime)
+        }
         const onPause = () => setIsPlaying(false)
         const onEnded = () => setIsPlaying(false)
         const onError = () => setLoading(false) // Hide or handle error state
@@ -70,8 +81,18 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src
 
     const toggleMute = () => {
         if (!audioRef.current) return
-        audioRef.current.muted = !isMuted
-        setIsMuted(!isMuted)
+        const newMuted = !isMuted
+        audioRef.current.muted = newMuted
+        setIsMuted(newMuted)
+    }
+
+    const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const v = parseFloat(e.target.value)
+        if (!audioRef.current) return
+        audioRef.current.volume = v
+        audioRef.current.muted = v === 0
+        setVolume(v)
+        setIsMuted(v === 0)
     }
 
     const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -79,6 +100,7 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src
         if (audioRef.current) {
             audioRef.current.currentTime = time
             setCurrentTime(time)
+            if (onTimeUpdate) onTimeUpdate(time)
         }
     }
 
@@ -91,8 +113,7 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src
 
     const effectiveDuration = maxDuration && (!duration || !isFinite(duration) || duration < maxDuration) ? maxDuration : duration || 0
 
-    // If loading and we haven't errored out completely, we can still render
-    // but maybe disable inputs. For simplicity, just render.
+    if (!src) return null
 
     return (
         <div className="custom-audio-player">
@@ -123,9 +144,20 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src
             />
 
             <div className="volume-control">
-                <button type="button" className="mute-btn" onClick={toggleMute} title={isMuted ? "Unmute" : "Mute"}>
+                <button type="button" className="mute-btn" onClick={toggleMute} title={isMuted ? 'Unmute' : 'Mute'}>
                     {isMuted || volume === 0 ? <VolumeMuteIcon width={16} height={16} /> : <VolumeUpIcon width={16} height={16} />}
                 </button>
+                <input
+                    type="range"
+                    className="volume-slider"
+                    min={0}
+                    max={1}
+                    step={0.02}
+                    value={isMuted ? 0 : volume}
+                    onChange={handleVolumeChange}
+                    title={`Volume: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+                    style={{ '--vol': `${(isMuted ? 0 : volume) * 100}%` } as React.CSSProperties}
+                />
             </div>
         </div>
     )

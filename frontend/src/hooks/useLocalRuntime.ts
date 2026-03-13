@@ -1,10 +1,17 @@
 import { useEffect, useState } from 'react'
+import { buildBackendUrl } from '../api/client'
 
 export type BackendReachability = 'checking' | 'reachable' | 'unreachable'
+
+interface HealthResponse {
+  status?: string
+  auth_required?: boolean
+}
 
 export function useLocalRuntime() {
   const [browserOnline, setBrowserOnline] = useState(() => window.navigator.onLine)
   const [backendReachability, setBackendReachability] = useState<BackendReachability>('checking')
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -17,20 +24,24 @@ export function useLocalRuntime() {
       setBackendReachability((current) => (current === 'reachable' ? current : 'checking'))
 
       try {
-        const response = await fetch('/health', {
+        const response = await fetch(buildBackendUrl('/health'), {
           signal: controller.signal,
           cache: 'no-store',
           headers: {
             'X-Requested-With': 'ParrotScriptClient',
           },
         })
+        const payload = (await response.json().catch(() => ({}))) as HealthResponse
+        const isHealthy = response.ok && payload.status === 'ok'
 
         if (!cancelled) {
-          setBackendReachability(response.ok ? 'reachable' : 'unreachable')
+          setBackendReachability(isHealthy ? 'reachable' : 'unreachable')
+          setAuthRequired(isHealthy && typeof payload.auth_required === 'boolean' ? payload.auth_required : null)
         }
       } catch {
         if (!cancelled) {
           setBackendReachability('unreachable')
+          setAuthRequired(null)
         }
       } finally {
         window.clearTimeout(timeoutId)
@@ -65,5 +76,5 @@ export function useLocalRuntime() {
     }
   }, [])
 
-  return { browserOnline, backendReachability }
+  return { browserOnline, backendReachability, authRequired }
 }

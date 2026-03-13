@@ -2,7 +2,9 @@ import asyncio
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from backend.api.server import app
 from backend.config import settings
@@ -13,10 +15,10 @@ from backend.storage.repositories.speakers import SpeakersRepository
 from backend.storage.repositories.summaries import SummariesRepository
 
 
-def setup_test_db(tmp_path) -> TestClient:
+def setup_test_db(tmp_path, api_token: str = 'test-token') -> TestClient:
     db_file = tmp_path / 'test_api.db'
     settings.db_path = db_file.as_posix()
-    settings.api_token = 'test-token'
+    settings.api_token = api_token
     Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
     asyncio.run(init_db())
     return TestClient(app)
@@ -136,3 +138,40 @@ def test_transcript_pagination(tmp_path) -> None:
     body2 = page2.json()
     assert body2['total'] == 3
     assert len(body2['items']) == 1
+
+
+def test_health_reports_optional_auth_and_allows_requests_without_token(tmp_path) -> None:
+    client = setup_test_db(tmp_path, api_token='')
+
+    health = client.get('/health')
+    assert health.status_code == 200
+    assert health.json() == {'status': 'ok', 'auth_required': False}
+
+    meetings = client.get('/api/meetings/')
+    assert meetings.status_code == 200
+    assert isinstance(meetings.json(), list)
+
+
+def test_websocket_rejects_unauthorized_clients(tmp_path) -> None:
+    client = setup_test_db(tmp_path)
+
+    with client.websocket_connect('/ws/meetings/test-meeting') as websocket:
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            websocket.receive_text()
+
+    assert exc_info.value.code == 4401
+
+
+def test_cors_allows_loopback_preview_origin(tmp_path) -> None:
+    client = setup_test_db(tmp_path)
+
+    response = client.options(
+        '/api/meetings/',
+        headers={
+            'Origin': 'http://127.0.0.1:4173',
+            'Access-Control-Request-Method': 'GET',
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers['access-control-allow-origin'] == 'http://127.0.0.1:4173'
