@@ -15,7 +15,7 @@ PYTHON_BIN="python"
 if [ -x ".venv/bin/python" ]; then
   PYTHON_BIN=".venv/bin/python"
 fi
-"$PYTHON_BIN" -m uvicorn backend.api.server:app --host "${API_HOST:-127.0.0.1}" --port "${API_PORT:-8000}" --log-level "${API_LOG_LEVEL:-info}" >/tmp/parrot-script-backend.log 2>&1 &
+"$PYTHON_BIN" -m backend.main --host "${API_HOST:-127.0.0.1}" --port "${API_PORT:-8000}" --log-level "${API_LOG_LEVEL:-info}" --no-reload >/tmp/parrot-script-backend.log 2>&1 &
 sleep 2
 
 echo ""

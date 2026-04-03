@@ -1,4 +1,8 @@
 export type MeetingLifecycleStatus = 'active' | 'recording' | 'completed' | 'failed'
+export type CaptureMode = 'private' | 'assistant'
+export type SourcePlatform = 'local' | 'google_meet' | 'zoom' | 'teams' | 'other'
+export type AssistantJoinStatus = 'not_requested' | 'pending' | 'joined' | 'unsupported' | 'failed'
+export type ConsentStatus = 'not_needed' | 'required' | 'pending' | 'granted' | 'denied' | 'unknown'
 
 export interface Meeting {
   id: string
@@ -8,6 +12,29 @@ export interface Meeting {
   duration_s: number | null
   status: MeetingLifecycleStatus
   metadata: string | null
+  capture_mode: CaptureMode
+  ghost_mode: boolean
+  source_platform: SourcePlatform | null
+  meeting_url: string | null
+  assistant_join_status: AssistantJoinStatus
+  assistant_visible_name: string | null
+  consent_status: ConsentStatus
+  provider_session_id: string | null
+  provider_metadata: string | null
+}
+
+export interface StartRecordingOptions {
+  capture_mode?: CaptureMode
+  ghost_mode?: boolean
+  meeting_url?: string | null
+  source_platform?: SourcePlatform | null
+  assistant_visible_name?: string | null
+}
+
+export interface StartRecordingResult {
+  status: string
+  meeting_id: string
+  message: string | null
 }
 
 export interface Segment {

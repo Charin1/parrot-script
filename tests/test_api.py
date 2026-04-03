@@ -6,6 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from backend.api.routes import meetings as meetings_routes
+from backend.assistants import AssistantSession
 from backend.api.server import app
 from backend.config import settings
 from backend.core.events import TranscriptSegmentEvent
@@ -43,6 +45,10 @@ def test_create_and_list_meetings(tmp_path) -> None:
     body = created.json()
     assert 'id' in body
     assert body['title'] == 'Test Meeting'
+    assert body['capture_mode'] == 'private'
+    assert body['ghost_mode'] is True
+    assert body['assistant_join_status'] == 'not_requested'
+    assert body['consent_status'] == 'not_needed'
 
     security = client.get('/health')
     assert security.status_code == 200
@@ -55,6 +61,101 @@ def test_create_and_list_meetings(tmp_path) -> None:
         headers=auth_headers(),
     )
     assert bad_update.status_code == 422
+
+
+def test_assistant_mode_start_launches_recording_flow(tmp_path, monkeypatch) -> None:
+    client = setup_test_db(tmp_path)
+
+    created = client.post(
+        '/api/meetings/',
+        json={'title': 'Assistant Mode'},
+        headers=auth_headers(),
+    )
+    assert created.status_code == 200
+    meeting_id = created.json()['id']
+
+    async def fake_start_pipeline(meeting_id: str, pipeline) -> None:
+        return None
+
+    class FakeAssistantProvider:
+        async def request_join(self, request) -> AssistantSession:
+            return AssistantSession(
+                join_status='pending',
+                source_platform='google_meet',
+                consent_status='required',
+                provider_session_id='provider-session-1',
+                provider_metadata={'launch_strategy': 'test'},
+                message='Google Meet was opened on this device and live capture has started.',
+            )
+
+    monkeypatch.setattr(meetings_routes, '_start_pipeline', fake_start_pipeline)
+    monkeypatch.setattr(meetings_routes, 'assistant_provider', FakeAssistantProvider())
+
+    started = client.post(
+        f'/api/meetings/{meeting_id}/start',
+        json={
+            'capture_mode': 'assistant',
+            'ghost_mode': False,
+            'meeting_url': 'https://meet.google.com/abc-defg-hij',
+            'assistant_visible_name': 'Parrot Script Assistant',
+        },
+        headers=auth_headers(),
+    )
+    assert started.status_code == 200
+    payload = started.json()
+    assert payload['status'] == 'recording'
+    assert 'opened' in payload['message'].lower()
+
+    meeting = client.get(f'/api/meetings/{meeting_id}', headers=auth_headers())
+    assert meeting.status_code == 200
+    body = meeting.json()
+    assert body['status'] == 'recording'
+    assert body['capture_mode'] == 'assistant'
+    assert body['ghost_mode'] is False
+    assert body['source_platform'] == 'google_meet'
+    assert body['meeting_url'] == 'https://meet.google.com/abc-defg-hij'
+    assert body['assistant_join_status'] == 'pending'
+    assert body['consent_status'] == 'required'
+    assert body['provider_session_id'] == 'provider-session-1'
+
+
+def test_private_mode_start_keeps_recording_flow(tmp_path, monkeypatch) -> None:
+    client = setup_test_db(tmp_path)
+
+    created = client.post(
+        '/api/meetings/',
+        json={'title': 'Private Mode'},
+        headers=auth_headers(),
+    )
+    assert created.status_code == 200
+    meeting_id = created.json()['id']
+
+    async def fake_start_pipeline(meeting_id: str, pipeline) -> None:
+        return None
+
+    monkeypatch.setattr(meetings_routes, '_start_pipeline', fake_start_pipeline)
+
+    started = client.post(
+        f'/api/meetings/{meeting_id}/start',
+        json={
+            'capture_mode': 'private',
+            'ghost_mode': True,
+        },
+        headers=auth_headers(),
+    )
+    assert started.status_code == 200
+    payload = started.json()
+    assert payload['status'] == 'recording'
+    assert payload['message'] is None
+
+    meeting = client.get(f'/api/meetings/{meeting_id}', headers=auth_headers())
+    assert meeting.status_code == 200
+    body = meeting.json()
+    assert body['status'] == 'recording'
+    assert body['capture_mode'] == 'private'
+    assert body['ghost_mode'] is True
+    assert body['source_platform'] == 'local'
+    assert body['assistant_join_status'] == 'not_requested'
 
 
 def test_delete_meeting_with_related_rows(tmp_path) -> None:

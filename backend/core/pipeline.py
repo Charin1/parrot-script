@@ -9,19 +9,20 @@ from typing import Optional
 from uuid import uuid4
 
 from backend.api.websocket import manager
-from backend.audio.capture import AudioCapture
+from backend.audio.sources import CaptureSource, LocalAudioSource
 from backend.config import settings
 from backend.core.events import MeetingStatusEvent, TranscriptSegmentEvent
+from backend.diarization.audio import slice_segment_audio
 from backend.diarization.speaker_cluster import SpeakerClusterer
-from pathlib import Path
 from backend.storage.repositories.segments import SegmentsRepository
 from backend.storage.repositories.speakers import SpeakersRepository
+from backend.transcription.models import Segment
 from backend.transcription.whisper_stream import WhisperTranscriber
 
 logger = logging.getLogger(__name__)
 
-# Shared executor for CPU-bound work (Whisper + Resemblyzer).
-# max_workers=4 allows 2-3 Whisper transcriptions + speaker embeddings in parallel.
+# Shared executor for CPU-bound work (Whisper + speaker embeddings).
+# max_workers=4 allows multiple transcriptions while keeping diarization responsive.
 _cpu_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pipeline-cpu")
 
 # Max number of chunks processed concurrently per pipeline.
@@ -29,16 +30,9 @@ MAX_CONCURRENT_CHUNKS = 3
 
 
 class MeetingPipeline:
-    def __init__(self, meeting_id: str):
+    def __init__(self, meeting_id: str, capture_source: CaptureSource | None = None):
         self.meeting_id = meeting_id
-        audio_path = Path(settings.db_path).parent / f"{meeting_id}.wav"
-        
-        self.capture = AudioCapture(
-            device_index=settings.audio_device_index,
-            sample_rate=settings.audio_sample_rate,
-            chunk_seconds=settings.audio_chunk_seconds,
-            record_to_file=audio_path,
-        )
+        self.capture_source = capture_source or LocalAudioSource(meeting_id)
         self.transcriber = WhisperTranscriber()
         self.clusterer = SpeakerClusterer()
         self.segments_repo = SegmentsRepository()
@@ -63,7 +57,7 @@ class MeetingPipeline:
         await loop.run_in_executor(_cpu_executor, self.transcriber.load_model)
         await loop.run_in_executor(_cpu_executor, self.clusterer.embedder.load)
 
-        await self.capture.start()
+        await self.capture_source.start()
         self.running = True
         self.start_epoch = time.time()
         self._task = asyncio.create_task(self._process_loop())
@@ -85,7 +79,7 @@ class MeetingPipeline:
 
     async def stop(self) -> None:
         self.running = False
-        await self.capture.stop()
+        await self.capture_source.stop()
 
         if self._task is not None:
             try:
@@ -98,19 +92,18 @@ class MeetingPipeline:
 
         # Drain any remaining chunks sequentially (pipeline is stopping)
         loop = asyncio.get_running_loop()
-        while not self.capture.queue.empty():
-            chunk = self.capture.queue.get_nowait()
+        while not self.capture_source.queue.empty():
+            chunk = self.capture_source.queue.get_nowait()
             try:
-                segments_future = loop.run_in_executor(
+                segments = await loop.run_in_executor(
                     _cpu_executor, self.transcriber.transcribe, chunk.data
                 )
-                speaker_future = loop.run_in_executor(
-                    _cpu_executor, self.clusterer.assign_speaker, chunk.data
-                )
-                segments, speaker = await asyncio.gather(segments_future, speaker_future)
                 if not segments:
                     continue
-                for segment in segments:
+                speaker_labels = await loop.run_in_executor(
+                    _cpu_executor, self._assign_speakers, chunk.data, chunk.timestamp, segments
+                )
+                for segment, speaker in zip(segments, speaker_labels):
                     event = TranscriptSegmentEvent(
                         meeting_id=self.meeting_id,
                         speaker=speaker,
@@ -140,7 +133,7 @@ class MeetingPipeline:
                     MeetingStatusEvent(
                         meeting_id=self.meeting_id,
                         recording=False,
-                        speakers_detected=len(self.clusterer.unique_speakers),
+                        speakers_detected=self.clusterer.reported_speaker_count(),
                         duration_s=max(0.0, time.time() - self.start_epoch),
                     )
                 ),
@@ -150,7 +143,7 @@ class MeetingPipeline:
     async def _process_loop(self) -> None:
         """Main loop: process chunks concurrently but emit results in strict arrival order."""
         # Completed results keyed by sequence number
-        results: dict[int, tuple] = {}   # seq -> (chunk, segments, speaker)
+        results: dict[int, tuple] = {}   # seq -> (chunk, segments)
         next_seq_to_emit = 0             # the next seq we must emit
         seq_counter = 0                  # monotonically increasing per chunk
         pending: dict[int, asyncio.Task] = {}  # seq -> processing task
@@ -160,13 +153,27 @@ class MeetingPipeline:
             """Emit results in strict sequence order."""
             nonlocal next_seq_to_emit
             while next_seq_to_emit in results:
-                chunk, segments, speaker = results.pop(next_seq_to_emit)
+                seq = next_seq_to_emit
+                chunk, segments = results.pop(next_seq_to_emit)
                 next_seq_to_emit += 1
 
                 if not segments:
                     continue
 
-                for segment in segments:
+                try:
+                    loop = asyncio.get_running_loop()
+                    speaker_labels = await loop.run_in_executor(
+                        _cpu_executor,
+                        self._assign_speakers,
+                        chunk.data,
+                        chunk.timestamp,
+                        segments,
+                    )
+                except Exception as exc:
+                    logger.exception("Failed to assign speakers for audio chunk seq=%d: %s", seq, exc)
+                    speaker_labels = ["Unknown"] * len(segments)
+
+                for segment, speaker in zip(segments, speaker_labels):
                     event = TranscriptSegmentEvent(
                         meeting_id=self.meeting_id,
                         speaker=speaker,
@@ -197,7 +204,7 @@ class MeetingPipeline:
                             MeetingStatusEvent(
                                 meeting_id=self.meeting_id,
                                 recording=True,
-                                speakers_detected=len(self.clusterer.unique_speakers),
+                                speakers_detected=self.clusterer.reported_speaker_count(),
                                 duration_s=max(0.0, time.time() - self.start_epoch),
                             )
                         ),
@@ -205,27 +212,23 @@ class MeetingPipeline:
                 )
 
         async def _process_and_store(seq: int, chunk) -> None:
-            """Run Whisper + speaker embedding in parallel, store result."""
+            """Transcribe a chunk and store the result for ordered speaker assignment."""
             try:
                 loop = asyncio.get_running_loop()
-                segments_future = loop.run_in_executor(
+                segments = await loop.run_in_executor(
                     _cpu_executor, self.transcriber.transcribe, chunk.data
                 )
-                speaker_future = loop.run_in_executor(
-                    _cpu_executor, self.clusterer.assign_speaker, chunk.data
-                )
-                segments, speaker = await asyncio.gather(segments_future, speaker_future)
-                results[seq] = (chunk, segments, speaker)
+                results[seq] = (chunk, segments)
             except Exception as exc:
                 logger.exception("Failed to process audio chunk seq=%d: %s", seq, exc)
-                results[seq] = (chunk, [], "Unknown")
+                results[seq] = (chunk, [])
             finally:
                 pending.pop(seq, None)
                 results_ready.set()
 
         while self.running:
             try:
-                chunk = await asyncio.wait_for(self.capture.queue.get(), timeout=0.5)
+                chunk = await asyncio.wait_for(self.capture_source.queue.get(), timeout=0.5)
             except asyncio.TimeoutError:
                 # Even on timeout, try to emit any ready results
                 await _emit_ready()
@@ -251,4 +254,27 @@ class MeetingPipeline:
         # Emit any remaining results
         await _emit_ready()
 
-
+    def _assign_speakers(
+        self,
+        chunk_audio: bytes,
+        chunk_timestamp: float,
+        segments: list[Segment],
+    ) -> list[str]:
+        labels: list[str] = []
+        for segment in segments:
+            segment_audio = slice_segment_audio(
+                chunk_audio,
+                segment.start,
+                segment.end,
+                sample_rate=settings.audio_sample_rate,
+                padding_s=settings.speaker_segment_padding_seconds,
+                min_duration_s=settings.speaker_min_segment_seconds,
+            )
+            labels.append(
+                self.clusterer.assign_speaker(
+                    segment_audio,
+                    segment_start=chunk_timestamp + segment.start,
+                    segment_end=chunk_timestamp + segment.end,
+                )
+            )
+        return labels

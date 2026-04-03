@@ -61,7 +61,8 @@ h3 {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -582,6 +583,12 @@ input {
   font-weight: 600;
 }
 
+.info-banner {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
 .panel-header,
 .controls-actions,
 .search-row {
@@ -604,7 +611,55 @@ input {
 .controls-panel {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.controls-content {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.start-config {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+  max-width: 760px;
+}
+
+.start-config-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.field-group label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.field-group select {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.55rem 0.72rem;
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.mode-summary {
+  display: flex;
   align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
 }
 
 button {
@@ -628,7 +683,8 @@ button:hover:not(:disabled) {
 }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 75%, #ffffff);
   outline-offset: 2px;
 }
@@ -806,6 +862,10 @@ code {
   .controls-panel {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .start-config-row {
+    grid-template-columns: 1fr;
   }
 
   .brand-top-row {

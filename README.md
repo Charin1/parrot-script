@@ -76,7 +76,7 @@ pip install -r requirements.txt
 ```bash
 cd frontend
 npm install
-cd ../..
+cd ..
 ```
 
 4. Create the runtime config:
@@ -163,31 +163,37 @@ Notes:
 
 ## Backend Start
 
-Development with reload:
+Preferred local development:
 
 ```bash
 source .venv/bin/activate
-uvicorn backend.api.server:app --host 127.0.0.1 --port 8000 --reload
+python -m backend.main --reload
 ```
 
 Local run without reload:
 
 ```bash
 source .venv/bin/activate
-uvicorn backend.api.server:app --host 127.0.0.1 --port 8000 --log-level info
+python -m backend.main --no-reload
 ```
 
-Production-style multi-worker process:
+Direct `uvicorn` equivalent if you prefer the raw ASGI entrypoint:
 
 ```bash
 source .venv/bin/activate
-gunicorn -w 2 -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:8000 backend.api.server:app
+uvicorn backend.api.server:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+Notes:
+
+- `python -m backend.main` reads the default host, port, reload flag, worker count, and log level from `.env`.
+- The ASGI app import path is `backend.api.server:app`.
+- Do not run multiple backend workers for live meetings. Active pipelines and WebSocket connections are kept in process memory.
 
 ## Frontend Start
 
 ```bash
-cd frontend/react-app
+cd frontend
 npm run dev
 ```
 
@@ -209,7 +215,7 @@ This starts Ollama and the backend together:
 It launches:
 
 - Ollama on `127.0.0.1:11434`
-- Uvicorn on `127.0.0.1:8000`
+- The backend server on `127.0.0.1:8000`
 
 ## Network Behavior
 
@@ -235,14 +241,14 @@ PYTHONPYCACHEPREFIX=/tmp/parrot-script-pycache .venv/bin/python -m pytest -q
 Frontend typecheck:
 
 ```bash
-cd frontend/react-app
+cd frontend
 npm run typecheck
 ```
 
 Frontend production build:
 
 ```bash
-cd frontend/react-app
+cd frontend
 npm run build
 ```
 
@@ -250,7 +256,7 @@ npm run build
 
 ### Backend not reachable
 
-- Confirm `uvicorn` is running on `127.0.0.1:8000`
+- Confirm the backend server is running on `127.0.0.1:8000`
 - Open [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
 - Confirm `CORS_ORIGINS` includes the frontend origin you are using
 - Confirm the UI token matches `API_TOKEN` in `.env`

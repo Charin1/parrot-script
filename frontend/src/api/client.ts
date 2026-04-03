@@ -1,9 +1,10 @@
 import axios, { AxiosError } from 'axios'
-import type { Meeting, SearchResult, Segment, Summary } from '../types/models'
+import type { Meeting, SearchResult, Segment, StartRecordingOptions, StartRecordingResult, Summary } from '../types/models'
 
 const API_TOKEN_STORAGE_KEY = 'parrot-script-api-token'
 const DEFAULT_BACKEND_PORT = '8000'
 const DEFAULT_BACKEND_PROTOCOL = 'http:'
+const TRANSCRIPT_PAGE_SIZE = 500
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '')
@@ -122,8 +123,19 @@ export const api = {
     return data
   },
 
-  async startRecording(id: string): Promise<void> {
-    await client.post(`/meetings/${id}/start`)
+  async startRecording(id: string, options?: StartRecordingOptions): Promise<StartRecordingResult> {
+    const body: Record<string, unknown> = {}
+    if (options?.capture_mode) body.capture_mode = options.capture_mode
+    if (typeof options?.ghost_mode === 'boolean') body.ghost_mode = options.ghost_mode
+    if (options?.meeting_url !== undefined) {
+      body.meeting_url = options.meeting_url?.trim() || null
+    }
+    if (options?.source_platform) body.source_platform = options.source_platform
+    if (options?.assistant_visible_name !== undefined) {
+      body.assistant_visible_name = options.assistant_visible_name?.trim() || null
+    }
+    const { data } = await client.post<StartRecordingResult>(`/meetings/${id}/start`, body)
+    return data
   },
 
   async stopRecording(id: string): Promise<void> {
@@ -131,8 +143,24 @@ export const api = {
   },
 
   async getTranscript(id: string, signal?: AbortSignal): Promise<Segment[]> {
-    const { data } = await client.get<{ items: Segment[] }>(`/meetings/${id}/transcript`, { signal })
-    return data.items
+    let page = 1
+    let total = 0
+    const items: Segment[] = []
+
+    do {
+      const { data } = await client.get<{ items: Segment[]; total: number }>(`/meetings/${id}/transcript`, {
+        signal,
+        params: {
+          page,
+          limit: TRANSCRIPT_PAGE_SIZE,
+        },
+      })
+      items.push(...data.items)
+      total = data.total
+      page += 1
+    } while (items.length < total)
+
+    return items
   },
 
   async getSummary(id: string, signal?: AbortSignal): Promise<Summary> {

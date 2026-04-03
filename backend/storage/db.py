@@ -14,7 +14,16 @@ CREATE TABLE IF NOT EXISTS meetings (
     ended_at DATETIME,
     duration_s REAL,
     status TEXT DEFAULT 'active',
-    metadata TEXT
+    metadata TEXT,
+    capture_mode TEXT DEFAULT 'private',
+    ghost_mode BOOLEAN DEFAULT 1,
+    source_platform TEXT,
+    meeting_url TEXT,
+    assistant_join_status TEXT DEFAULT 'not_requested',
+    assistant_visible_name TEXT DEFAULT 'Parrot Script Assistant',
+    consent_status TEXT DEFAULT 'not_needed',
+    provider_session_id TEXT,
+    provider_metadata TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transcript_segments (
@@ -67,6 +76,24 @@ async def init_db() -> None:
     db = await get_db()
     try:
         await db.executescript(SCHEMA_SQL)
+
+        async with db.execute("PRAGMA table_info(meetings)") as cur:
+            meeting_columns = [dict(row)["name"] for row in await cur.fetchall()]
+
+        meeting_migrations = {
+            "capture_mode": "ALTER TABLE meetings ADD COLUMN capture_mode TEXT DEFAULT 'private'",
+            "ghost_mode": "ALTER TABLE meetings ADD COLUMN ghost_mode BOOLEAN DEFAULT 1",
+            "source_platform": "ALTER TABLE meetings ADD COLUMN source_platform TEXT",
+            "meeting_url": "ALTER TABLE meetings ADD COLUMN meeting_url TEXT",
+            "assistant_join_status": "ALTER TABLE meetings ADD COLUMN assistant_join_status TEXT DEFAULT 'not_requested'",
+            "assistant_visible_name": "ALTER TABLE meetings ADD COLUMN assistant_visible_name TEXT DEFAULT 'Parrot Script Assistant'",
+            "consent_status": "ALTER TABLE meetings ADD COLUMN consent_status TEXT DEFAULT 'not_needed'",
+            "provider_session_id": "ALTER TABLE meetings ADD COLUMN provider_session_id TEXT",
+            "provider_metadata": "ALTER TABLE meetings ADD COLUMN provider_metadata TEXT",
+        }
+        for column, sql in meeting_migrations.items():
+            if column not in meeting_columns:
+                await db.execute(sql)
         
         # Safe migration for new is_bookmarked column
         async with db.execute("PRAGMA table_info(transcript_segments)") as cur:

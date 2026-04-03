@@ -11,7 +11,7 @@ import { PlusIcon } from './components/icons'
 import { useLocalRuntime } from './hooks/useLocalRuntime'
 import { useTheme } from './hooks/useTheme'
 import { useWebSocket } from './hooks/useWebSocket'
-import type { Meeting, Summary } from './types/models'
+import type { Meeting, MeetingStatus, StartRecordingOptions, Summary } from './types/models'
 
 function App() {
   const [meetings, setMeetings] = useState<Meeting[]>([])
@@ -20,6 +20,7 @@ function App() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [busy, setBusy] = useState(false)
   const [appError, setAppError] = useState<string | null>(null)
+  const [appNotice, setAppNotice] = useState<string | null>(null)
   const [apiTokenInput, setApiTokenInput] = useState(() => getApiToken())
   const [activeApiToken, setActiveApiToken] = useState(() => getApiToken())
   const [viewMode, setViewMode] = useState<'workspace' | 'dashboard'>('workspace')
@@ -41,11 +42,41 @@ function App() {
     () => meetings.find((meeting) => meeting.id === selectedMeetingId) ?? null,
     [meetings, selectedMeetingId],
   )
+  const speakerCountLabel = 'Estimated speakers'
 
   const { segments, status, setSegments, connectionState } = useWebSocket(
     selectedMeetingId,
     activeApiToken,
   )
+  const effectiveStatus = useMemo<MeetingStatus | undefined>(() => {
+    if (!selectedMeetingId) {
+      return undefined
+    }
+
+    const derivedDuration = segments.length > 0 ? segments[segments.length - 1].end_time : 0
+    const fallbackSpeakerCount =
+      segments.length > 0 ? new Set(segments.map((segment) => segment.speaker)).size : 0
+
+    if (status) {
+      return {
+        ...status,
+        speakers_detected:
+          status.speakers_detected > 0 ? status.speakers_detected : fallbackSpeakerCount,
+        duration_s: Math.max(status.duration_s, derivedDuration),
+      }
+    }
+
+    if (selectedMeeting?.status === 'recording' && (derivedDuration > 0 || fallbackSpeakerCount > 0)) {
+      return {
+        meeting_id: selectedMeetingId,
+        recording: true,
+        speakers_detected: fallbackSpeakerCount,
+        duration_s: derivedDuration,
+      }
+    }
+
+    return undefined
+  }, [segments, selectedMeeting?.status, selectedMeetingId, status])
 
   const refreshMeetings = useCallback(async (signal?: AbortSignal, filters?: {
     q?: string
@@ -129,6 +160,52 @@ function App() {
   }, [authReady, selectedMeetingId, setSegments])
 
   useEffect(() => {
+    if (!authReady || !selectedMeetingId || selectedMeeting?.status !== 'recording') {
+      return
+    }
+
+    let disposed = false
+    let inFlight = false
+
+    const pollLiveMeeting = async () => {
+      if (disposed || inFlight) {
+        return
+      }
+
+      inFlight = true
+      try {
+        const [meeting, items] = await Promise.all([
+          api.getMeeting(selectedMeetingId),
+          api.getTranscript(selectedMeetingId),
+        ])
+
+        if (disposed) {
+          return
+        }
+
+        setMeetings((current) =>
+          current.map((existing) => (existing.id === meeting.id ? meeting : existing)),
+        )
+        setSegments(items)
+      } catch {
+        // Keep websocket as the primary live path. Polling is a silent fallback.
+      } finally {
+        inFlight = false
+      }
+    }
+
+    void pollLiveMeeting()
+    const intervalId = window.setInterval(() => {
+      void pollLiveMeeting()
+    }, 4000)
+
+    return () => {
+      disposed = true
+      window.clearInterval(intervalId)
+    }
+  }, [authReady, selectedMeetingId, selectedMeeting?.status, setSegments])
+
+  useEffect(() => {
     const recovered =
       previousBackendReachability.current !== 'reachable' && backendReachability === 'reachable'
 
@@ -151,6 +228,7 @@ function App() {
   const runBusy = async (action: () => Promise<void>) => {
     setBusy(true)
     setAppError(null)
+    setAppNotice(null)
     try {
       await action()
     } catch (error) {
@@ -176,11 +254,14 @@ function App() {
     })
   }
 
-  const startMeeting = async () => {
+  const startMeeting = async (options: StartRecordingOptions) => {
     if (!selectedMeetingId) return
     await runBusy(async () => {
-      await api.startRecording(selectedMeetingId)
+      const result = await api.startRecording(selectedMeetingId, options)
       await refreshMeetings()
+      if (result.message) {
+        setAppNotice(result.message)
+      }
     })
   }
 
@@ -323,6 +404,12 @@ function App() {
           </div>
         ) : null}
 
+        {!appError && appNotice ? (
+          <div className="panel info-banner" role="status">
+            {appNotice}
+          </div>
+        ) : null}
+
         <div className="panel create-panel">
           <h3>New Meeting</h3>
           <div className="search-row">
@@ -389,10 +476,10 @@ function App() {
               onStop={stopMeeting}
               busy={busy || !authReady}
             />
-            {status ? (
+            {effectiveStatus ? (
               <div className="panel status-panel">
-                Speakers detected: <strong>{status.speakers_detected}</strong> | Duration:{' '}
-                <strong>{Math.round(status.duration_s)}s</strong>
+                {speakerCountLabel}: <strong>{effectiveStatus.speakers_detected}</strong> | Duration:{' '}
+                <strong>{Math.round(effectiveStatus.duration_s)}s</strong>
               </div>
             ) : null}
             <LiveTranscript segments={segments} meetingId={selectedMeetingId} />

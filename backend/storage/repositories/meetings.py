@@ -8,6 +8,21 @@ logger = logging.getLogger(__name__)
 
 
 class MeetingsRepository:
+    @staticmethod
+    def _normalize_meeting(row) -> Optional[dict]:
+        if row is None:
+            return None
+
+        meeting = dict(row)
+        meeting["capture_mode"] = meeting.get("capture_mode") or "private"
+        meeting["ghost_mode"] = bool(meeting.get("ghost_mode", True))
+        meeting["assistant_join_status"] = meeting.get("assistant_join_status") or "not_requested"
+        meeting["assistant_visible_name"] = (
+            meeting.get("assistant_visible_name") or "Parrot Script Assistant"
+        )
+        meeting["consent_status"] = meeting.get("consent_status") or "not_needed"
+        return meeting
+
     async def create(self, title: str) -> dict:
         meeting_id = str(uuid4())
         db = await get_db()
@@ -29,7 +44,7 @@ class MeetingsRepository:
                 (meeting_id,),
             ) as cur:
                 row = await cur.fetchone()
-                return dict(row) if row else None
+                return self._normalize_meeting(row)
         finally:
             await db.close()
 
@@ -63,12 +78,27 @@ class MeetingsRepository:
         try:
             async with db.execute(sql, params) as cur:
                 rows = await cur.fetchall()
-                return [dict(row) for row in rows]
+                return [self._normalize_meeting(row) for row in rows]
         finally:
             await db.close()
 
     async def update(self, meeting_id: str, **kwargs) -> dict:
-        allowed = {"title", "ended_at", "duration_s", "status", "metadata"}
+        allowed = {
+            "title",
+            "ended_at",
+            "duration_s",
+            "status",
+            "metadata",
+            "capture_mode",
+            "ghost_mode",
+            "source_platform",
+            "meeting_url",
+            "assistant_join_status",
+            "assistant_visible_name",
+            "consent_status",
+            "provider_session_id",
+            "provider_metadata",
+        }
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
             current = await self.get(meeting_id)

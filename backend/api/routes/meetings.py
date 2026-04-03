@@ -14,6 +14,14 @@ from pydantic import BaseModel, Field, field_validator
 import aiofiles
 from pathlib import Path
 
+from backend.assistants import (
+    AssistantJoinRequest,
+    LocalMeetingAssistantProvider,
+    infer_source_platform,
+    resolve_capture_mode,
+    serialize_provider_metadata,
+)
+from backend.audio.sources import LocalAudioSource
 from backend.config import settings
 
 from backend.core.pipeline import MeetingPipeline
@@ -27,8 +35,13 @@ meetings_repo = MeetingsRepository()
 speakers_repo = SpeakersRepository()
 active_pipelines: dict[str, MeetingPipeline] = {}
 _pipeline_start_tasks: dict[str, asyncio.Task] = {}
+assistant_provider = LocalMeetingAssistantProvider()
 
 MeetingStatus = Literal['active', 'recording', 'completed', 'failed']
+CaptureMode = Literal['private', 'assistant']
+SourcePlatform = Literal['local', 'google_meet', 'zoom', 'teams', 'other']
+AssistantJoinStatus = Literal['not_requested', 'pending', 'joined', 'unsupported', 'failed']
+ConsentStatus = Literal['not_needed', 'required', 'pending', 'granted', 'denied', 'unknown']
 
 
 class RenameSpeakerRequest(BaseModel):
@@ -59,6 +72,15 @@ class UpdateMeetingRequest(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
     status: Optional[MeetingStatus] = None
     metadata: Optional[str] = Field(default=None, max_length=4000)
+    capture_mode: Optional[CaptureMode] = None
+    ghost_mode: Optional[bool] = None
+    source_platform: Optional[SourcePlatform] = None
+    meeting_url: Optional[str] = Field(default=None, max_length=2000)
+    assistant_join_status: Optional[AssistantJoinStatus] = None
+    assistant_visible_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    consent_status: Optional[ConsentStatus] = None
+    provider_session_id: Optional[str] = Field(default=None, max_length=200)
+    provider_metadata: Optional[str] = Field(default=None, max_length=4000)
 
     @field_validator('title')
     @classmethod
@@ -68,6 +90,50 @@ class UpdateMeetingRequest(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError('title cannot be empty')
+        return cleaned
+
+    @field_validator('meeting_url')
+    @classmethod
+    def normalize_optional_meeting_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator('assistant_visible_name')
+    @classmethod
+    def normalize_optional_assistant_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError('assistant_visible_name cannot be empty')
+        return cleaned
+
+
+class StartMeetingRequest(BaseModel):
+    capture_mode: Optional[CaptureMode] = None
+    ghost_mode: Optional[bool] = None
+    meeting_url: Optional[str] = Field(default=None, max_length=2000)
+    source_platform: Optional[SourcePlatform] = None
+    assistant_visible_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator('meeting_url')
+    @classmethod
+    def normalize_meeting_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator('assistant_visible_name')
+    @classmethod
+    def normalize_assistant_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError('assistant_visible_name cannot be empty')
         return cleaned
 
 
@@ -222,23 +288,105 @@ async def delete_meeting(meeting_id: UUID) -> dict[str, bool]:
 
 
 @router.post('/{meeting_id}/start')
-async def start_recording(meeting_id: UUID) -> dict[str, str]:
+async def start_recording(meeting_id: UUID, body: Optional[StartMeetingRequest] = None) -> dict[str, Any]:
     meeting_id_str = str(meeting_id)
     meeting = await meetings_repo.get(meeting_id_str)
     if meeting is None:
         raise HTTPException(status_code=404, detail='Meeting not found')
 
     if meeting_id_str in active_pipelines:
-        return {'status': 'recording', 'meeting_id': meeting_id_str}
+        return {'status': 'recording', 'meeting_id': meeting_id_str, 'message': None}
 
-    pipeline = MeetingPipeline(meeting_id_str)
+    body = body or StartMeetingRequest()
+
+    capture_mode, ghost_mode = resolve_capture_mode(body.capture_mode, body.ghost_mode)
+    assistant_visible_name = (
+        body.assistant_visible_name
+        or meeting.get('assistant_visible_name')
+        or 'Parrot Script Assistant'
+    )
+    meeting_url = body.meeting_url if body.meeting_url is not None else meeting.get('meeting_url')
+    source_platform = body.source_platform or infer_source_platform(meeting_url)
+
+    if capture_mode == 'assistant':
+        if not meeting_url:
+            raise HTTPException(
+                status_code=422,
+                detail='Assistant mode currently requires a meeting URL.',
+            )
+
+        session = await assistant_provider.request_join(
+            AssistantJoinRequest(
+                meeting_id=meeting_id_str,
+                title=meeting['title'],
+                meeting_url=meeting_url,
+                source_platform=source_platform or 'other',
+                assistant_visible_name=assistant_visible_name,
+            )
+        )
+        if session.join_status == 'failed':
+            await meetings_repo.update(
+                meeting_id_str,
+                capture_mode='assistant',
+                ghost_mode=False,
+                source_platform=session.source_platform,
+                meeting_url=meeting_url,
+                assistant_join_status=session.join_status,
+                assistant_visible_name=assistant_visible_name,
+                consent_status=session.consent_status,
+                provider_session_id=session.provider_session_id,
+                provider_metadata=serialize_provider_metadata(session.provider_metadata),
+                status='failed',
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=session.message or 'Assistant mode could not open the meeting link.',
+            )
+
+        pipeline = MeetingPipeline(meeting_id_str, capture_source=LocalAudioSource(meeting_id_str))
+        active_pipelines[meeting_id_str] = pipeline
+        start_task = asyncio.create_task(_start_pipeline(meeting_id_str, pipeline))
+        _pipeline_start_tasks[meeting_id_str] = start_task
+
+        await meetings_repo.update(
+            meeting_id_str,
+            capture_mode='assistant',
+            ghost_mode=False,
+            source_platform=session.source_platform,
+            meeting_url=meeting_url,
+            assistant_join_status=session.join_status,
+            assistant_visible_name=assistant_visible_name,
+            consent_status=session.consent_status,
+            provider_session_id=session.provider_session_id,
+            provider_metadata=serialize_provider_metadata(session.provider_metadata),
+            status='recording',
+        )
+        return {
+            'status': 'recording',
+            'meeting_id': meeting_id_str,
+            'message': session.message,
+        }
+
+    pipeline = MeetingPipeline(meeting_id_str, capture_source=LocalAudioSource(meeting_id_str))
     active_pipelines[meeting_id_str] = pipeline
 
     start_task = asyncio.create_task(_start_pipeline(meeting_id_str, pipeline))
     _pipeline_start_tasks[meeting_id_str] = start_task
 
-    await meetings_repo.update(meeting_id_str, status='recording')
-    return {'status': 'recording', 'meeting_id': meeting_id_str}
+    await meetings_repo.update(
+        meeting_id_str,
+        status='recording',
+        capture_mode='private',
+        ghost_mode=ghost_mode,
+        source_platform='local',
+        meeting_url=meeting_url,
+        assistant_join_status='not_requested',
+        assistant_visible_name=assistant_visible_name,
+        consent_status='not_needed',
+        provider_session_id=None,
+        provider_metadata=None,
+    )
+    return {'status': 'recording', 'meeting_id': meeting_id_str, 'message': None}
 
 
 @router.post('/{meeting_id}/stop')

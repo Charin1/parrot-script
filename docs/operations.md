@@ -15,7 +15,7 @@ pip install -r requirements.txt
 ```bash
 cd frontend
 npm install
-cd ../..
+cd ..
 ```
 
 ### Environment
@@ -37,28 +37,23 @@ Review at minimum:
 
 ```bash
 source .venv/bin/activate
-uvicorn backend.api.server:app --host 127.0.0.1 --port 8000 --reload
+python -m backend.main --reload
 ```
 
 ### Backend without reload
 
 ```bash
 source .venv/bin/activate
-uvicorn backend.api.server:app --host 127.0.0.1 --port 8000 --log-level info
+python -m backend.main --no-reload
 ```
+
+The raw ASGI entrypoint is `backend.api.server:app` if you want to run `uvicorn` directly.
 
 ### Frontend dev server
 
 ```bash
 cd frontend
 npm run dev
-```
-
-### Production-style backend
-
-```bash
-source .venv/bin/activate
-gunicorn -w 2 -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:8000 backend.api.server:app
 ```
 
 ### Helper startup
@@ -71,8 +66,10 @@ This helper script:
 
 - verifies `ffmpeg` and `ollama` exist
 - starts `ollama serve`
-- starts `uvicorn backend.api.server:app`
+- starts `python -m backend.main --no-reload`
 - writes logs to `/tmp/parrot-script-ollama.log` and `/tmp/parrot-script-backend.log`
+
+Do not run multiple backend workers for live meetings. Active pipelines and WebSocket connections are stored in process memory.
 
 ## Environment Variables
 
@@ -140,9 +137,9 @@ This helper script:
 - `backend/config.py`
 - `backend/api/auth.py`
 - `backend/api/server.py`
-- `frontend/react-app/src/api/client.ts`
-- `frontend/react-app/src/hooks/useWebSocket.ts`
-- `frontend/react-app/vite.config.ts`
+- `frontend/src/api/client.ts`
+- `frontend/src/hooks/useWebSocket.ts`
+- `frontend/vite.config.ts`
 
 ## Audio Capture Notes
 
@@ -162,14 +159,14 @@ PYTHONPYCACHEPREFIX=/tmp/parrot-script-pycache .venv/bin/python -m pytest -q
 ### Frontend typecheck
 
 ```bash
-cd frontend/react-app
+cd frontend
 npm run typecheck
 ```
 
 ### Frontend build
 
 ```bash
-cd frontend/react-app
+cd frontend
 npm run build
 ```
 
@@ -182,7 +179,7 @@ npm run build
 
 ### Backend unreachable
 
-- Check `uvicorn` is running on `127.0.0.1:8000`.
+- Check the backend server is running on `127.0.0.1:8000`.
 - Open `http://127.0.0.1:8000/health`.
 - Confirm the frontend is using the correct token.
 - Confirm Vite proxy settings still point to `127.0.0.1:8000`.

@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     max_speakers: int = 8
     speaker_cluster_threshold: float = 0.85
     embedding_window_size: int = 50
+    speaker_segment_padding_seconds: float = 0.35
+    speaker_min_segment_seconds: float = 1.2
+    speaker_similarity_margin: float = 0.08
+    speaker_temporal_hold_seconds: float = 1.25
+    speaker_min_stable_segments: int = 2
+    speaker_min_stable_seconds: float = 2.0
+    speaker_reporting_merge_threshold: float = 0.93
 
     # Summarization
     summary_chunk_size: int = 3000
