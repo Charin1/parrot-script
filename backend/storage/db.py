@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncIterator
 
 import aiosqlite
 
@@ -61,7 +63,15 @@ CREATE INDEX IF NOT EXISTS idx_segments_meeting
 """
 
 
-async def get_db() -> aiosqlite.Connection:
+@asynccontextmanager
+async def get_db() -> AsyncIterator[aiosqlite.Connection]:
+    """Async context manager that yields a configured SQLite connection.
+
+    Usage::
+
+        async with get_db() as db:
+            await db.execute(...)
+    """
     db_path = Path(settings.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -69,12 +79,14 @@ async def get_db() -> aiosqlite.Connection:
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
-    return db
+    try:
+        yield db
+    finally:
+        await db.close()
 
 
 async def init_db() -> None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         await db.executescript(SCHEMA_SQL)
 
         async with db.execute("PRAGMA table_info(meetings)") as cur:
@@ -94,13 +106,22 @@ async def init_db() -> None:
         for column, sql in meeting_migrations.items():
             if column not in meeting_columns:
                 await db.execute(sql)
-        
+
+        # Safe migration for video recording columns
+        video_migrations = {
+            "recording_type": "ALTER TABLE meetings ADD COLUMN recording_type TEXT DEFAULT 'audio'",
+            "video_resolution": "ALTER TABLE meetings ADD COLUMN video_resolution TEXT",
+            "has_video": "ALTER TABLE meetings ADD COLUMN has_video BOOLEAN DEFAULT 0",
+        }
+        for column, sql in video_migrations.items():
+            if column not in meeting_columns:
+                await db.execute(sql)
+
         # Safe migration for new is_bookmarked column
         async with db.execute("PRAGMA table_info(transcript_segments)") as cur:
             columns = [dict(row)["name"] for row in await cur.fetchall()]
             if "is_bookmarked" not in columns:
                 await db.execute("ALTER TABLE transcript_segments ADD COLUMN is_bookmarked BOOLEAN DEFAULT 0")
-        
+
         await db.commit()
-    finally:
-        await db.close()
+

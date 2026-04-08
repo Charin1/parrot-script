@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import secrets
-from typing import Optional
 
 from fastapi import Request, WebSocket, status
 from fastapi.responses import JSONResponse, Response
@@ -15,7 +14,7 @@ def auth_enabled() -> bool:
     return bool(settings.api_token.strip())
 
 
-def extract_bearer_token(authorization: str | None) -> Optional[str]:
+def extract_bearer_token(authorization: str | None) -> str | None:
     if not authorization:
         return None
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import sys
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _ffmpeg_device_output(fmt: str) -> str:
@@ -66,7 +69,7 @@ def list_audio_devices() -> list[dict]:
     else:
         # Linux / PulseAudio - FFmpeg doesn't easily list pulse devices the same way natively.
         # Advise the user to use standard tools.
-        print("Linux detected: Please use 'pactl list sources short' or 'arecord -l' to find your audio devices.")
+        logger.warning("Linux detected: Please use 'pactl list sources short' or 'arecord -l' to find your audio devices.")
         devices.append({"index": "default", "name": "Default PulseAudio/ALSA input"})
 
     return devices

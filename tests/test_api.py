@@ -119,6 +119,59 @@ def test_assistant_mode_start_launches_recording_flow(tmp_path, monkeypatch) -> 
     assert body['provider_session_id'] == 'provider-session-1'
 
 
+def test_assistant_mode_normalizes_google_meet_code(tmp_path, monkeypatch) -> None:
+    client = setup_test_db(tmp_path)
+
+    created = client.post(
+        '/api/meetings/',
+        json={'title': 'Assistant URL Normalize'},
+        headers=auth_headers(),
+    )
+    assert created.status_code == 200
+    meeting_id = created.json()['id']
+
+    captured_request = {}
+
+    async def fake_start_pipeline(meeting_id: str, pipeline) -> None:
+        return None
+
+    class FakeAssistantProvider:
+        async def request_join(self, request) -> AssistantSession:
+            captured_request["meeting_url"] = request.meeting_url
+            captured_request["source_platform"] = request.source_platform
+            return AssistantSession(
+                join_status='pending',
+                source_platform=request.source_platform,
+                consent_status='required',
+                provider_session_id='provider-session-2',
+                provider_metadata={'launch_strategy': 'test'},
+                message='Google Meet was opened on this device and live capture has started.',
+            )
+
+    monkeypatch.setattr(meetings_routes, '_start_pipeline', fake_start_pipeline)
+    monkeypatch.setattr(meetings_routes, 'assistant_provider', FakeAssistantProvider())
+
+    started = client.post(
+        f'/api/meetings/{meeting_id}/start',
+        json={
+            'capture_mode': 'assistant',
+            'ghost_mode': False,
+            'meeting_url': 'abc-defg-hij',
+            'assistant_visible_name': 'Parrot Script Assistant',
+        },
+        headers=auth_headers(),
+    )
+    assert started.status_code == 200
+    assert captured_request["meeting_url"] == 'https://meet.google.com/abc-defg-hij'
+    assert captured_request["source_platform"] == 'google_meet'
+
+    meeting = client.get(f'/api/meetings/{meeting_id}', headers=auth_headers())
+    assert meeting.status_code == 200
+    body = meeting.json()
+    assert body['meeting_url'] == 'https://meet.google.com/abc-defg-hij'
+    assert body['source_platform'] == 'google_meet'
+
+
 def test_private_mode_start_keeps_recording_flow(tmp_path, monkeypatch) -> None:
     client = setup_test_db(tmp_path)
 

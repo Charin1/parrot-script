@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, clearApiToken, formatApiError, getApiToken, setApiToken } from './api/client'
+import { api, formatApiError } from './api/client'
 import { LiveTranscript } from './components/LiveTranscript'
 import { MeetingControls } from './components/MeetingControls'
 import { PastMeetingsDashboard } from './components/PastMeetingsDashboard'
@@ -7,47 +7,87 @@ import { RuntimeStatusPanel } from './components/RuntimeStatusPanel'
 import { SearchBar } from './components/SearchBar'
 import { SummaryPanel } from './components/SummaryPanel'
 import { ThemeSelector } from './components/ThemeSelector'
+import { useMeetings } from './hooks/useMeetings'
+import { useLowBandwidth } from './hooks/useLowBandwidth'
 import { PlusIcon } from './components/icons'
-import { useLocalRuntime } from './hooks/useLocalRuntime'
+import { useAuth } from './hooks/useAuth'
 import { useTheme } from './hooks/useTheme'
 import { useWebSocket } from './hooks/useWebSocket'
-import type { Meeting, MeetingStatus, StartRecordingOptions, Summary } from './types/models'
+import type { MeetingStatus, PlaybackSyncSource } from './types/models'
+import { VideoPlayer } from './components/VideoPlayer'
 
 function App() {
-  const [meetings, setMeetings] = useState<Meeting[]>([])
-  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null)
-  const [newTitle, setNewTitle] = useState('Weekly Sync')
-  const [summary, setSummary] = useState<Summary | null>(null)
   const [busy, setBusy] = useState(false)
   const [appError, setAppError] = useState<string | null>(null)
   const [appNotice, setAppNotice] = useState<string | null>(null)
-  const [apiTokenInput, setApiTokenInput] = useState(() => getApiToken())
-  const [activeApiToken, setActiveApiToken] = useState(() => getApiToken())
+  const [newTitle, setNewTitle] = useState('Weekly Sync')
   const [viewMode, setViewMode] = useState<'workspace' | 'dashboard'>('workspace')
+  const [videoExpanded, setVideoExpanded] = useState(false)
+  const [playbackTime, setPlaybackTime] = useState(0)
+  const [playbackPlaying, setPlaybackPlaying] = useState(false)
+  const [playbackSource, setPlaybackSource] = useState<PlaybackSyncSource>('system')
   const { mode, resolved, setMode } = useTheme()
-  const { browserOnline, backendReachability, authRequired } = useLocalRuntime()
+  const { lowBandwidth, toggleLowBandwidth } = useLowBandwidth()
+
+  const {
+    browserOnline,
+    backendReachability,
+    authRequired,
+    authReady,
+    apiTokenInput,
+    setApiTokenInput,
+    activeApiToken,
+    authBadgeClass,
+    authBadgeLabel,
+    authDescription,
+    saveApiToken: hookSaveApiToken,
+    removeApiToken: hookRemoveApiToken,
+  } = useAuth()
+  
   const previousBackendReachability = useRef(backendReachability)
-  const hasApiToken = activeApiToken.trim().length > 0
-  const authReady = authRequired === false || hasApiToken
-  const authBadgeClass =
-    authRequired === null ? 'badge-idle' : authReady ? 'badge-ok' : 'badge-failed'
-  const authBadgeLabel =
-    authRequired === null ? 'Checking Auth' : authRequired ? (hasApiToken ? 'Token Loaded' : 'Token Required') : 'Token Optional'
-  const authDescription =
-    authRequired === false
-      ? 'Backend auth is disabled right now. You can leave the token blank unless you enable API_TOKEN again.'
-      : 'The local API expects a shared token. It stays in this browser and is attached to API and live stream requests.'
+
+  const {
+    meetings,
+    setMeetings,
+    selectedMeetingId,
+    setSelectedMeetingId,
+    summary,
+    setSummary,
+    clearMeetingsState,
+    refreshMeetings,
+    createMeeting,
+    startMeeting,
+    stopMeeting,
+    generateSummary,
+    deleteMeeting,
+  } = useMeetings(authReady, setAppError, setAppNotice, setBusy, (segments) => setSegments(segments))
+
+  const { segments, status, setSegments, connectionState } = useWebSocket(
+    selectedMeetingId,
+    activeApiToken,
+  )
 
   const selectedMeeting = useMemo(
     () => meetings.find((meeting) => meeting.id === selectedMeetingId) ?? null,
     [meetings, selectedMeetingId],
   )
   const speakerCountLabel = 'Estimated speakers'
-
-  const { segments, status, setSegments, connectionState } = useWebSocket(
-    selectedMeetingId,
-    activeApiToken,
+  const videoEnabled = Boolean(
+    selectedMeeting && (selectedMeeting.recording_type === 'video_audio' || selectedMeeting.has_video),
   )
+  const videoStatusHint =
+    selectedMeeting?.status === 'recording'
+      ? 'Recording in video mode. Click to expand or minimize.'
+      : selectedMeeting?.has_video
+        ? 'Recording complete. Click to open or minimize playback.'
+        : 'Video mode is enabled.'
+  const videoSrc = useMemo(() => {
+    if (!selectedMeeting || !videoEnabled || !videoExpanded || lowBandwidth) {
+      return null
+    }
+    return api.getVideoUrl(selectedMeeting.id)
+  }, [activeApiToken, lowBandwidth, selectedMeeting?.id, videoEnabled, videoExpanded])
+
   const effectiveStatus = useMemo<MeetingStatus | undefined>(() => {
     if (!selectedMeetingId) {
       return undefined
@@ -77,22 +117,6 @@ function App() {
 
     return undefined
   }, [segments, selectedMeeting?.status, selectedMeetingId, status])
-
-  const refreshMeetings = useCallback(async (signal?: AbortSignal, filters?: {
-    q?: string
-    status?: string
-    from_date?: string
-    to_date?: string
-  }) => {
-    const list = await api.listMeetings(signal, filters)
-    setMeetings(list)
-    setSelectedMeetingId((current) => {
-      if (current && list.some((meeting) => meeting.id === current)) {
-        return current
-      }
-      return list.length > 0 ? list[0].id : null
-    })
-  }, [])
 
   const handleDashboardFiltersChange = useCallback((filters: {
     q?: string
@@ -195,15 +219,39 @@ function App() {
     }
 
     void pollLiveMeeting()
+    // Adaptive interval: double the poll frequency on low-bandwidth to reduce HTTP overhead
+    const pollInterval = lowBandwidth ? 8000 : 4000
     const intervalId = window.setInterval(() => {
       void pollLiveMeeting()
-    }, 4000)
+    }, pollInterval)
 
     return () => {
       disposed = true
       window.clearInterval(intervalId)
     }
-  }, [authReady, selectedMeetingId, selectedMeeting?.status, setSegments])
+  }, [authReady, selectedMeetingId, selectedMeeting?.status, setSegments, lowBandwidth])
+
+  useEffect(() => {
+    setVideoExpanded(false)
+  }, [selectedMeetingId])
+
+  useEffect(() => {
+    setPlaybackTime(0)
+    setPlaybackPlaying(false)
+    setPlaybackSource('system')
+  }, [selectedMeetingId])
+
+  useEffect(() => {
+    if (!videoEnabled) {
+      setVideoExpanded(false)
+    }
+  }, [videoEnabled])
+
+  useEffect(() => {
+    if (!videoExpanded && playbackSource === 'video') {
+      setPlaybackSource('system')
+    }
+  }, [videoExpanded, playbackSource])
 
   useEffect(() => {
     const recovered =
@@ -225,103 +273,25 @@ function App() {
     return () => controller.abort()
   }, [authReady, backendReachability, refreshMeetings])
 
-  const runBusy = async (action: () => Promise<void>) => {
-    setBusy(true)
-    setAppError(null)
-    setAppNotice(null)
-    try {
-      await action()
-    } catch (error) {
-      setAppError(formatApiError(error))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const createMeeting = async () => {
+  const onCreateMeetingClick = () => {
     const title = newTitle.trim()
     if (!title) {
       setAppError('Meeting title cannot be empty')
       return
     }
-
-    await runBusy(async () => {
-      const created = await api.createMeeting(title)
-      await refreshMeetings()
-      setSelectedMeetingId(created.id)
-      setSummary(null)
-      setSegments([])
-    })
+    void createMeeting(title)
   }
 
-  const startMeeting = async (options: StartRecordingOptions) => {
-    if (!selectedMeetingId) return
-    await runBusy(async () => {
-      const result = await api.startRecording(selectedMeetingId, options)
-      await refreshMeetings()
-      if (result.message) {
-        setAppNotice(result.message)
-      }
-    })
-  }
-
-  const stopMeeting = async () => {
-    if (!selectedMeetingId) return
-    await runBusy(async () => {
-      await api.stopRecording(selectedMeetingId)
-      await refreshMeetings()
-    })
-  }
-
-  const generateSummary = async (promptTemplate?: string) => {
-    if (!selectedMeetingId) return
-    await runBusy(async () => {
-      const data = await api.generateSummary(selectedMeetingId, promptTemplate)
-      setSummary(data)
-    })
-  }
-
-  const deleteMeeting = async (id: string) => {
-    const meeting = meetings.find(m => m.id === id)
-    const title = meeting?.title || 'this meeting'
-    
-    if (!window.confirm(`Are you sure you want to permanently delete "${title}"? This will remove all transcripts and the audio recording.`)) {
-      return
-    }
-
-    await runBusy(async () => {
-      await api.deleteMeeting(id)
-      if (selectedMeetingId === id) {
-        setSelectedMeetingId(null)
-        setSummary(null)
-        setSegments([])
-      }
-      await refreshMeetings()
-    })
-  }
-
-
-  const saveApiToken = async () => {
-    const cleanToken = apiTokenInput.trim()
-
-    if (!cleanToken) {
-      setApiToken('')
-      setActiveApiToken('')
-      setAppError(null)
+  const handleSaveToken = async () => {
+    const saved = hookSaveApiToken(apiTokenInput)
+    if (!saved) {
       if (authRequired !== false) {
-        setMeetings([])
-        setSelectedMeetingId(null)
-        setSummary(null)
-        setSegments([])
+        clearMeetingsState()
       }
       return
     }
-
     setBusy(true)
-    setApiToken(cleanToken)
-    setActiveApiToken(cleanToken)
     setAppError(null)
-
     try {
       await refreshMeetings()
     } catch (error) {
@@ -331,19 +301,26 @@ function App() {
     }
   }
 
-  const removeApiToken = () => {
-    clearApiToken()
-    setApiTokenInput('')
-    setActiveApiToken('')
+  const handleRemoveToken = () => {
+    hookRemoveApiToken()
     setAppError(null)
-
     if (authRequired !== false) {
-      setMeetings([])
-      setSelectedMeetingId(null)
-      setSummary(null)
-      setSegments([])
+      clearMeetingsState()
     }
   }
+
+  const handlePlaybackTimeChange = useCallback((time: number, source: PlaybackSyncSource) => {
+    if (!Number.isFinite(time) || time < 0) {
+      return
+    }
+    setPlaybackSource(source)
+    setPlaybackTime(time)
+  }, [])
+
+  const handlePlaybackPlayStateChange = useCallback((isPlaying: boolean, source: PlaybackSyncSource) => {
+    setPlaybackSource(source)
+    setPlaybackPlaying(isPlaying)
+  }, [])
 
   return (
     <div className="app-shell">
@@ -383,10 +360,10 @@ function App() {
               onChange={(event) => setApiTokenInput(event.target.value)}
               placeholder="Enter API token"
             />
-            <button type="button" onClick={() => void saveApiToken()} disabled={busy}>
+            <button type="button" onClick={() => void handleSaveToken()} disabled={busy}>
               Save Token
             </button>
-            <button type="button" className="secondary" onClick={removeApiToken} disabled={busy}>
+            <button type="button" className="secondary" onClick={handleRemoveToken} disabled={busy}>
               Clear
             </button>
           </div>
@@ -396,6 +373,8 @@ function App() {
           browserOnline={browserOnline}
           backendReachability={backendReachability}
           streamState={connectionState}
+          lowBandwidth={lowBandwidth}
+          onToggleLowBandwidth={toggleLowBandwidth}
         />
 
         {appError ? (
@@ -419,7 +398,7 @@ function App() {
               placeholder="Meeting title"
               maxLength={200}
             />
-            <button type="button" onClick={() => void createMeeting()} disabled={busy || !authReady}>
+            <button type="button" onClick={onCreateMeetingClick} disabled={busy || !authReady}>
               <PlusIcon className="btn-icon" width={14} height={14} />
               <span>Create</span>
             </button>
@@ -464,7 +443,10 @@ function App() {
               setSelectedMeetingId(meetingId)
               setViewMode('workspace')
             }}
-            onDeleteMeeting={deleteMeeting}
+            onDeleteMeeting={(id) => {
+              const m = meetings.find((x) => x.id === id)
+              void deleteMeeting(id, m?.title || 'this meeting')
+            }}
             onFiltersChange={handleDashboardFiltersChange}
           />
 
@@ -472,6 +454,7 @@ function App() {
           <>
             <MeetingControls
               meeting={selectedMeeting}
+              liveDurationS={effectiveStatus?.duration_s ?? 0}
               onStart={startMeeting}
               onStop={stopMeeting}
               busy={busy || !authReady}
@@ -482,7 +465,51 @@ function App() {
                 <strong>{Math.round(effectiveStatus.duration_s)}s</strong>
               </div>
             ) : null}
-            <LiveTranscript segments={segments} meetingId={selectedMeetingId} />
+            {videoEnabled ? (
+              <div className="panel video-toggle-panel">
+                <button
+                  type="button"
+                  className={videoExpanded ? '' : 'secondary'}
+                  onClick={() => setVideoExpanded((current) => !current)}
+                >
+                  {videoExpanded ? 'Minimize Video' : 'Video'}
+                </button>
+                <span className="muted">{videoStatusHint}</span>
+              </div>
+            ) : null}
+            {videoEnabled && videoExpanded ? (
+              lowBandwidth ? (
+                <div className="panel video-low-bandwidth-panel">
+                  <span className="badge badge-idle">Video Ready</span>
+                  <span className="muted">Low Bandwidth Mode is on, so video loading is paused.</span>
+                  <button type="button" className="secondary" onClick={toggleLowBandwidth}>
+                    Load Video
+                  </button>
+                </div>
+              ) : videoSrc && selectedMeeting ? (
+                <VideoPlayer
+                  src={videoSrc}
+                  meetingTitle={selectedMeeting.title}
+                  onDownload={
+                    selectedMeeting.has_video ? () => void api.downloadVideo(selectedMeeting.id) : undefined
+                  }
+                  onTimeUpdate={(time) => handlePlaybackTimeChange(time, 'video')}
+                  onPlayStateChange={(isPlaying) => handlePlaybackPlayStateChange(isPlaying, 'video')}
+                  syncTime={playbackTime}
+                  syncPlaying={playbackPlaying}
+                  syncSource={playbackSource}
+                />
+              ) : null
+            ) : null}
+            <LiveTranscript
+              segments={segments}
+              meetingId={selectedMeetingId}
+              playbackTime={playbackTime}
+              playbackPlaying={playbackPlaying}
+              playbackSource={playbackSource}
+              onPlaybackTimeChange={handlePlaybackTimeChange}
+              onPlaybackPlayStateChange={handlePlaybackPlayStateChange}
+            />
             <SummaryPanel
               summary={summary}
               onGenerate={generateSummary}

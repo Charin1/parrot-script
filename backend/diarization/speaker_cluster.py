@@ -66,8 +66,8 @@ class SpeakerClusterer:
             recent_label = self._recent_label(segment_start)
             recent_score = similarities.get(recent_label, -1.0) if recent_label else -1.0
 
-            logger.info("Speaker similarities: %s", ranked)
-            logger.info(
+            logger.debug("Speaker similarities: %s", ranked)
+            logger.debug(
                 "Best match: %s with score %.3f (Threshold: %.3f, Margin: %.3f)",
                 best_label,
                 best_score,
@@ -99,7 +99,7 @@ class SpeakerClusterer:
                 assigned = self._new_label()
 
             self._remember_assignment(assigned, embedding, segment_start, segment_end)
-            logger.info("Assigned chunk to %s", assigned)
+            logger.debug("Assigned chunk to %s", assigned)
             return assigned
 
     def get_centroid(self, label: str) -> np.ndarray:

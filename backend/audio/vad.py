@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import struct
+
 import math
+import numpy as np
 
 
 class VoiceActivityDetector:
     """Energy-based Voice Activity Detector.
 
     Replaces webrtcvad (incompatible with Python 3.13) with a pure-Python
-    implementation that uses RMS energy thresholding on 16-bit PCM frames.
+    implementation that uses numpy-vectorized RMS energy thresholding on 16-bit PCM frames.
     """
 
     def __init__(self, aggressiveness: int = 2, sample_rate: int = 16000):
@@ -24,12 +25,12 @@ class VoiceActivityDetector:
     @staticmethod
     def _rms(frame: bytes) -> float:
         """Compute the Root Mean Square energy of a 16-bit PCM frame."""
-        n_samples = len(frame) // 2
-        if n_samples == 0:
+        if not frame:
             return 0.0
-        samples = struct.unpack(f"<{n_samples}h", frame[: n_samples * 2])
-        sum_sq = sum(s * s for s in samples)
-        return math.sqrt(sum_sq / n_samples)
+        
+        # Vectorized RMS via numpy directly from buffer pointer
+        samples = np.frombuffer(frame, dtype=np.int16)
+        return float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
 
     def is_speech(self, audio_bytes: bytes) -> bool:
         """Return True if a 30ms frame contains speech."""

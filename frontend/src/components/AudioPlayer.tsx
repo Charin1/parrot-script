@@ -1,15 +1,29 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { PlayIcon, PauseIcon, VolumeUpIcon, VolumeMuteIcon } from './icons'
+import type { PlaybackSyncSource } from '../types/models'
 
 interface AudioPlayerProps {
     src: string
     onTimeUpdate?: (time: number) => void
+    onPlayStateChange?: (isPlaying: boolean) => void
     maxDuration?: number
+    syncTime?: number
+    syncPlaying?: boolean
+    syncSource?: PlaybackSyncSource
 }
 
-export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src, onTimeUpdate, maxDuration }, forwardedRef) => {
+export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({
+    src,
+    onTimeUpdate,
+    onPlayStateChange,
+    maxDuration,
+    syncTime,
+    syncPlaying,
+    syncSource = 'system',
+}, forwardedRef) => {
     const audioRef = useRef<HTMLAudioElement | null>(null)
     useImperativeHandle(forwardedRef, () => audioRef.current!)
+    const suppressEventsUntilRef = useRef(0)
 
     const [isPlaying, setIsPlaying] = useState(false)
     const [duration, setDuration] = useState(0)
@@ -26,6 +40,13 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src
         setLoading(true)
     }, [src])
 
+    const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+    const suppressEventsFor = (ms: number) => {
+        suppressEventsUntilRef.current = nowMs() + ms
+    }
+    const eventsSuppressed = () => nowMs() < suppressEventsUntilRef.current
+    const shouldPublishPlayback = syncSource !== 'video'
+
     useEffect(() => {
         const audio = audioRef.current
         if (!audio) return
@@ -38,15 +59,30 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src
 
         const setAudioTime = () => {
             setCurrentTime(audio.currentTime)
-            if (onTimeUpdate) onTimeUpdate(audio.currentTime)
+            if (!eventsSuppressed() && shouldPublishPlayback && onTimeUpdate) {
+                onTimeUpdate(audio.currentTime)
+            }
         }
 
         const onPlay = () => {
             setIsPlaying(true)
-            if (onTimeUpdate) onTimeUpdate(audio.currentTime)
+            if (!eventsSuppressed() && shouldPublishPlayback) {
+                if (onPlayStateChange) onPlayStateChange(true)
+                if (onTimeUpdate) onTimeUpdate(audio.currentTime)
+            }
         }
-        const onPause = () => setIsPlaying(false)
-        const onEnded = () => setIsPlaying(false)
+        const onPause = () => {
+            setIsPlaying(false)
+            if (!eventsSuppressed() && shouldPublishPlayback && onPlayStateChange) {
+                onPlayStateChange(false)
+            }
+        }
+        const onEnded = () => {
+            setIsPlaying(false)
+            if (!eventsSuppressed() && shouldPublishPlayback && onPlayStateChange) {
+                onPlayStateChange(false)
+            }
+        }
         const onError = () => setLoading(false) // Hide or handle error state
 
         if (audio.readyState > 0) {
@@ -68,14 +104,50 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(({ src
             audio.removeEventListener('ended', onEnded)
             audio.removeEventListener('error', onError)
         }
-    }, [onTimeUpdate, src])
+    }, [onPlayStateChange, onTimeUpdate, shouldPublishPlayback, src])
+
+    useEffect(() => {
+        const audio = audioRef.current
+        if (!audio) return
+        if (syncSource === 'audio') return
+        if (syncTime === undefined || !Number.isFinite(syncTime) || syncTime < 0) return
+        if (Math.abs(audio.currentTime - syncTime) < 0.2) return
+
+        suppressEventsFor(300)
+        audio.currentTime = syncTime
+        setCurrentTime(syncTime)
+    }, [syncSource, syncTime, src])
+
+    useEffect(() => {
+        const audio = audioRef.current
+        if (!audio) return
+        if (syncSource === 'audio' || syncPlaying === undefined) return
+
+        if (syncPlaying) {
+            if (!audio.paused) return
+            suppressEventsFor(500)
+            audio.play().catch(() => { })
+            return
+        }
+
+        if (audio.paused) return
+        suppressEventsFor(300)
+        audio.pause()
+    }, [syncPlaying, syncSource, src])
 
     const togglePlayPause = () => {
         if (!audioRef.current) return
         if (isPlaying) {
             audioRef.current.pause()
+            if (onPlayStateChange) onPlayStateChange(false)
+            if (onTimeUpdate) onTimeUpdate(audioRef.current.currentTime)
         } else {
-            audioRef.current.play().catch(() => { })
+            audioRef.current.play()
+                .then(() => {
+                    if (onPlayStateChange) onPlayStateChange(true)
+                    if (onTimeUpdate) onTimeUpdate(audioRef.current?.currentTime ?? 0)
+                })
+                .catch(() => { })
         }
     }
 

@@ -1,8 +1,6 @@
-import tempfile
-import json
-from io import BytesIO
-from fpdf import FPDF
 from typing import Any
+
+from fpdf import FPDF
 
 class DocumentPDF(FPDF):
     def header(self):

@@ -38,13 +38,14 @@ Parrot Script runs locally on macOS, Linux, and Windows. You will need:
 
 - Python `3.11+`
 - Node.js `20+`
-- **FFmpeg** (Required for audio capture)
+- **FFmpeg** (Required for audio + video capture)
 - **Ollama** (Required for summarization)
 
 ### macOS Setup
 - **FFmpeg**: `brew install ffmpeg`
 - **Ollama**: `brew install ollama`
 - **System Audio**: Install [BlackHole 2ch](https://existential.audio/blackhole/) to capture internal system audio. Select BlackHole as your system output, and map it in Parrot Script.
+- **Screen Recording Permission (video mode)**: In **System Settings > Privacy & Security > Screen Recording**, allow the app running Parrot Script (`Terminal`, `iTerm`, or your Python host), then restart that app.
 
 ### Ubuntu Linux Setup
 - **FFmpeg**: `sudo apt update && sudo apt install ffmpeg`
@@ -121,6 +122,17 @@ Config is loaded from [backend/config.py](/Users/charinpatel/workspace/projects/
 | `AUDIO_CHUNK_SECONDS` | `5` | Pipeline chunk size |
 | `AUDIO_VAD_AGGRESSIVENESS` | `2` | WebRTC VAD aggressiveness |
 
+### Video / Screen Capture
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VIDEO_DEFAULT_RESOLUTION` | `1280x720` | Output resolution for screen recording |
+| `VIDEO_FRAMERATE` | `15` | Screen capture frame rate |
+| `VIDEO_CODEC` | `libx264` | FFmpeg video codec |
+| `VIDEO_CRF` | `23` | Encoder quality/size tradeoff (lower = better quality, larger file) |
+| `VIDEO_OUTPUT_FORMAT` | `mp4` | Container format |
+| `VIDEO_SCREEN_INDEX` | `0` | AVFoundation screen device index on macOS |
+
 ### Ollama / Storage
 
 | Variable | Default | Purpose |
@@ -160,6 +172,7 @@ Notes:
 - Keep `OLLAMA_BASE_URL` on `127.0.0.1` if you do not want transcript content leaving the machine.
 - `API_TOKEN` must match between `.env` and the frontend security panel.
 - **Audio Capture Formats**: The backend `capture.py` detects OS. macOS uses `avfoundation`, Linux uses `pulse` or `alsa`, and Windows uses `dshow`. Use `scripts/list_audio_devices.py` to find the correct `AUDIO_DEVICE_INDEX` for your specific platform format.
+- **Video Capture on macOS**: Use `.venv/bin/python scripts/list_video_devices.py` and set `VIDEO_SCREEN_INDEX` to a `Capture screen ...` entry.
 
 ## Backend Start
 
@@ -273,6 +286,14 @@ npm run build
 - Run `.venv/bin/python scripts/list_audio_devices.py`
 - Set the correct `AUDIO_DEVICE_INDEX` in `.env`
 - If you want system audio, confirm BlackHole is installed and routed correctly
+
+### No video captured on macOS
+
+- Verify Screen Recording permission is enabled for `Terminal`/`iTerm`/your Python host:
+  `System Settings > Privacy & Security > Screen Recording`
+- Restart the permitted app after changing permissions
+- Run `.venv/bin/python scripts/list_video_devices.py`
+- Set `VIDEO_SCREEN_INDEX` in `.env` to a `Capture screen ...` device
 
 ### Runtime feels slow
 

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
-import type { CaptureMode, Meeting, StartRecordingOptions } from '../types/models'
+import { useEffect, useRef, useState } from 'react'
+import type { CaptureMode, Meeting, RecordingType, StartRecordingOptions, VideoResolution } from '../types/models'
 import { PlayIcon, StopIcon } from './icons'
 
 interface Props {
   meeting: Meeting | null
+  liveDurationS?: number
   onStart: (options: StartRecordingOptions) => Promise<void>
   onStop: () => Promise<void>
   busy?: boolean
@@ -16,42 +17,113 @@ function formatDuration(seconds: number): string {
   return [hrs, mins, secs].map((n) => n.toString().padStart(2, '0')).join(':')
 }
 
-export function MeetingControls({ meeting, onStart, onStop, busy = false }: Props) {
+const RESOLUTION_OPTIONS: { value: VideoResolution; label: string }[] = [
+  { value: '1280x720', label: '720p (1280×720) — Default' },
+  { value: '854x480',  label: '480p (854×480) — Low bandwidth' },
+  { value: '1920x1080', label: '1080p (1920×1080) — High quality' },
+  { value: '2560x1440', label: '1440p (2560×1440) — Ultra quality' },
+]
+
+function readStoredAnchor(anchorKey: string): number | null {
+  try {
+    const raw = sessionStorage.getItem(anchorKey)
+    if (!raw) {
+      return null
+    }
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return null
+    }
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writeStoredAnchor(anchorKey: string, anchor: number): void {
+  try {
+    sessionStorage.setItem(anchorKey, String(anchor))
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function clearStoredAnchor(anchorKey: string): void {
+  try {
+    sessionStorage.removeItem(anchorKey)
+  } catch {
+    // ignore storage clear failures
+  }
+}
+
+export function MeetingControls({ meeting, liveDurationS = 0, onStart, onStop, busy = false }: Props) {
   const [elapsed, setElapsed] = useState(0)
+  const anchorRef = useRef<number | null>(null)
   const [captureMode, setCaptureMode] = useState<CaptureMode>('private')
   const [meetingUrl, setMeetingUrl] = useState('')
   const [assistantVisibleName, setAssistantVisibleName] = useState('Parrot Script Assistant')
+  const [recordingType, setRecordingType] = useState<RecordingType>('audio')
+  const [videoResolution, setVideoResolution] = useState<VideoResolution>('1280x720')
 
   useEffect(() => {
-    if (!meeting || meeting.status !== 'recording') {
+    if (!meeting) {
+      anchorRef.current = null
       setElapsed(0)
       return
     }
 
-    const baseDuration = meeting.duration_s || 0
-    // We don't have a reliable 'started_at' for the *current* recording session in the Meeting model yet,
-    // but we can approximate the current slice by checking how long we've been running this effect.
-    // Ideally the backend provides a `recording_started_at` timestamp.
-    // For now, let's just use a simple local timer if recording.
-    const startTick = Date.now()
-    const tick = () => setElapsed(baseDuration + Math.max(0, (Date.now() - startTick) / 1000))
+    const seedDuration = Math.max(0, liveDurationS, meeting.duration_s || 0)
+    const anchorKey = `parrot-live-anchor-${meeting.id}`
+
+    if (meeting.status !== 'recording') {
+      anchorRef.current = null
+      clearStoredAnchor(anchorKey)
+      setElapsed(seedDuration)
+      return
+    }
+
+    const now = Date.now()
+    const stored = readStoredAnchor(anchorKey)
+    let anchor = anchorRef.current ?? stored ?? now - seedDuration * 1000
+    const elapsedFromAnchor = Math.max(0, (now - anchor) / 1000)
+    if (seedDuration > elapsedFromAnchor + 0.75) {
+      anchor = now - seedDuration * 1000
+    }
+    anchorRef.current = anchor
+    writeStoredAnchor(anchorKey, anchor)
+
+    const tick = () => {
+      if (anchorRef.current == null) {
+        return
+      }
+      const next = Math.max(seedDuration, Math.max(0, (Date.now() - anchorRef.current) / 1000))
+      setElapsed(next)
+    }
     tick()
 
     const id = window.setInterval(tick, 1000)
     return () => window.clearInterval(id)
-  }, [meeting])
+  }, [meeting?.id, meeting?.status, meeting?.duration_s, liveDurationS])
 
   useEffect(() => {
     if (!meeting) {
       setCaptureMode('private')
       setMeetingUrl('')
       setAssistantVisibleName('Parrot Script Assistant')
+      setRecordingType('audio')
+      setVideoResolution('1280x720')
       return
     }
 
     setCaptureMode(meeting.capture_mode || 'private')
     setMeetingUrl(meeting.meeting_url || '')
     setAssistantVisibleName(meeting.assistant_visible_name || 'Parrot Script Assistant')
+    // Restore saved recording type and resolution if the meeting was already configured
+    if (meeting.recording_type) setRecordingType(meeting.recording_type)
+    if (meeting.video_resolution) {
+      const saved = meeting.video_resolution as VideoResolution
+      if (RESOLUTION_OPTIONS.some((o) => o.value === saved)) setVideoResolution(saved)
+    }
   }, [meeting])
 
   if (!meeting) {
@@ -74,6 +146,9 @@ export function MeetingControls({ meeting, onStart, onStop, busy = false }: Prop
         ? 'Completed'
         : 'Idle'
 
+  // All config controls are disabled once the session is active
+  const controlsLocked = busy || sessionActive
+
   return (
     <div className="controls-panel">
       <div className="controls-content">
@@ -81,12 +156,13 @@ export function MeetingControls({ meeting, onStart, onStop, busy = false }: Prop
         <p className="muted">Status: {meeting.status}</p>
         {!sessionActive ? (
           <div className="start-config">
+            {/* ── Ghost Mode ── */}
             <div className="field-group">
               <label htmlFor="ghost-mode-select">Ghost Mode</label>
               <select
                 id="ghost-mode-select"
                 value={captureMode}
-                disabled={busy || recording}
+                disabled={controlsLocked}
                 onChange={(event) => setCaptureMode(event.target.value as CaptureMode)}
               >
                 <option value="private">ON: Private on-device capture</option>
@@ -107,7 +183,7 @@ export function MeetingControls({ meeting, onStart, onStop, busy = false }: Prop
                   <input
                     id="meeting-url"
                     value={meetingUrl}
-                    disabled={busy || recording}
+                    disabled={controlsLocked}
                     onChange={(event) => setMeetingUrl(event.target.value)}
                     placeholder="https://meet.google.com/... or https://zoom.us/..."
                   />
@@ -117,7 +193,7 @@ export function MeetingControls({ meeting, onStart, onStop, busy = false }: Prop
                   <input
                     id="assistant-name"
                     value={assistantVisibleName}
-                    disabled={busy || recording}
+                    disabled={controlsLocked}
                     onChange={(event) => setAssistantVisibleName(event.target.value)}
                     placeholder="Parrot Script Assistant"
                   />
@@ -125,10 +201,50 @@ export function MeetingControls({ meeting, onStart, onStop, busy = false }: Prop
               </div>
             ) : null}
 
+            {/* ── Recording Type ── */}
+            <div className="field-group">
+              <label htmlFor="recording-type-select">Recording Type</label>
+              <select
+                id="recording-type-select"
+                value={recordingType}
+                disabled={controlsLocked}
+                onChange={(event) => setRecordingType(event.target.value as RecordingType)}
+              >
+                <option value="audio">Audio Only</option>
+                <option value="video_audio">Video + Audio (screen recording)</option>
+              </select>
+            </div>
+
+            {/* ── Resolution — only shown when video+audio selected ── */}
+            {recordingType === 'video_audio' ? (
+              <div className="field-group resolution-field">
+                <label htmlFor="resolution-select">Resolution</label>
+                <select
+                  id="resolution-select"
+                  value={videoResolution}
+                  disabled={controlsLocked}
+                  onChange={(event) => setVideoResolution(event.target.value as VideoResolution)}
+                >
+                  {RESOLUTION_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <p className="muted resolution-hint">
+                  {ghostModeEnabled
+                    ? 'Full screen will be recorded.'
+                    : 'The meeting window screen area will be recorded.'}
+                  {' '}15 fps · H.264 · MP4
+                </p>
+              </div>
+            ) : null}
+
             <div className="mode-summary">
               <span className={`badge ${ghostModeEnabled ? 'badge-idle' : 'badge-ok'}`}>
                 {modeBadgeLabel}
               </span>
+              {recordingType === 'video_audio' ? (
+                <span className="badge badge-video">🎬 Video</span>
+              ) : null}
               {joinState ? <span className="muted">Assistant state: {joinState.replace(/_/g, ' ')}</span> : null}
             </div>
           </div>
@@ -137,6 +253,9 @@ export function MeetingControls({ meeting, onStart, onStop, busy = false }: Prop
             <span className={`badge ${ghostModeEnabled ? 'badge-idle' : 'badge-ok'}`}>
               {modeBadgeLabel}
             </span>
+            {meeting.recording_type === 'video_audio' ? (
+              <span className="badge badge-video">🎬 Video</span>
+            ) : null}
             <span className="muted">
               {ghostModeEnabled
                 ? 'Ghost mode ON'
@@ -160,6 +279,8 @@ export function MeetingControls({ meeting, onStart, onStop, busy = false }: Prop
               ghost_mode: ghostModeEnabled,
               meeting_url: captureMode === 'assistant' ? meetingUrl : null,
               assistant_visible_name: captureMode === 'assistant' ? assistantVisibleName : null,
+              recording_type: recordingType,
+              video_resolution: recordingType === 'video_audio' ? videoResolution : null,
             })
           }
         >

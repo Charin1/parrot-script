@@ -150,9 +150,14 @@ export function useWebSocket(meetingId: string | null, apiToken: string) {
 
         retryAttempt += 1
         setConnectionState('reconnecting')
-        const baseDelay = Math.min(1000 * 2 ** Math.min(retryAttempt - 1, 4), 10000)
-        const jitter = Math.floor(Math.random() * 250)
-        scheduleReconnect(baseDelay + jitter)
+        
+        // Exponential backoff with Full Jitter, capping at 60s
+        const maxDelay = 60000
+        const baseDelay = 1000
+        const temp = Math.min(maxDelay, baseDelay * (2 ** Math.min(retryAttempt - 1, 10)))
+        const jitteredDelay = Math.floor(Math.random() * temp)
+        
+        scheduleReconnect(jitteredDelay)
       }
 
       currentSocket.onerror = () => {

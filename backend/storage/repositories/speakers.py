@@ -1,101 +1,90 @@
 from __future__ import annotations
 
-from typing import Optional
 from uuid import uuid4
 
 from backend.storage.db import get_db
 
 
-PALETTE = [
-    "#1f77b4",
-    "#ff7f0e",
-    "#2ca02c",
-    "#d62728",
-    "#9467bd",
-    "#8c564b",
-    "#e377c2",
-    "#7f7f7f",
-    "#bcbd22",
-    "#17becf",
-]
-
-
 class SpeakersRepository:
-    async def upsert(self, meeting_id: str, label: str) -> dict:
-        existing = await self._find_by_label(meeting_id, label)
-        if existing:
-            return existing
+    async def upsert(self, meeting_id: str, label: str, name: str | None = None) -> dict:
+        async with get_db() as db:
+            async with db.execute(
+                "SELECT * FROM speakers WHERE meeting_id = ? AND label = ?",
+                (meeting_id, label),
+            ) as cur:
+                existing = await cur.fetchone()
 
-        speaker_id = str(uuid4())
-        color = PALETTE[abs(hash(label)) % len(PALETTE)]
+            if existing:
+                if name:
+                    await db.execute(
+                        "UPDATE speakers SET name = ? WHERE id = ?",
+                        (name, dict(existing)["id"]),
+                    )
+                    await db.commit()
+                return dict(existing)
 
-        db = await get_db()
-        try:
+            speaker_id = str(uuid4())
             await db.execute(
-                "INSERT INTO speakers(id, meeting_id, label, color) VALUES (?, ?, ?, ?)",
-                (speaker_id, meeting_id, label, color),
+                "INSERT INTO speakers(id, meeting_id, label, name) VALUES (?, ?, ?, ?)",
+                (speaker_id, meeting_id, label, name or label),
             )
             await db.commit()
-        finally:
-            await db.close()
 
-        created = await self.get_by_id(speaker_id)
-        if created is None:
-            raise RuntimeError("Failed to create speaker")
-        return created
-
-    async def rename(self, speaker_id: str, name: str) -> dict:
-        db = await get_db()
-        try:
-            await db.execute(
-                "UPDATE speakers SET name = ? WHERE id = ?",
-                (name, speaker_id),
-            )
-            await db.commit()
-        finally:
-            await db.close()
-
-        updated = await self.get_by_id(speaker_id)
-        if updated is None:
-            raise ValueError(f"Speaker {speaker_id} not found")
-        return updated
-
-    async def rename_by_label(self, meeting_id: str, label: str, name: str) -> dict:
-        speaker = await self._find_by_label(meeting_id, label)
-        if not speaker:
-            raise ValueError(f"Speaker '{label}' not found in meeting {meeting_id}")
-            
-        return await self.rename(speaker["id"], name)
-
-    async def get_by_id(self, speaker_id: str) -> Optional[dict]:
-        db = await get_db()
-        try:
-            async with db.execute("SELECT * FROM speakers WHERE id = ?", (speaker_id,)) as cur:
-                row = await cur.fetchone()
-                return dict(row) if row else None
-        finally:
-            await db.close()
+        return await self._get(speaker_id)
 
     async def get_by_meeting(self, meeting_id: str) -> list[dict]:
-        db = await get_db()
-        try:
+        async with get_db() as db:
             async with db.execute(
-                "SELECT * FROM speakers WHERE meeting_id = ? ORDER BY label ASC",
+                "SELECT * FROM speakers WHERE meeting_id = ?",
                 (meeting_id,),
             ) as cur:
                 rows = await cur.fetchall()
                 return [dict(row) for row in rows]
-        finally:
-            await db.close()
 
-    async def _find_by_label(self, meeting_id: str, label: str) -> Optional[dict]:
-        db = await get_db()
-        try:
+    async def update_name(self, meeting_id: str, label: str, name: str) -> dict | None:
+        async with get_db() as db:
             async with db.execute(
-                "SELECT * FROM speakers WHERE meeting_id = ? AND label = ? LIMIT 1",
+                "SELECT * FROM speakers WHERE meeting_id = ? AND label = ?",
+                (meeting_id, label),
+            ) as cur:
+                existing = await cur.fetchone()
+
+            if not existing:
+                return None
+
+            await db.execute(
+                "UPDATE speakers SET name = ? WHERE id = ?",
+                (name, dict(existing)["id"]),
+            )
+            await db.commit()
+
+        return await self._get(dict(existing)["id"])
+
+    async def rename_by_label(self, meeting_id: str, label: str, name: str) -> dict:
+        """Alias for update_name, used by the meetings route."""
+        result = await self.update_name(meeting_id, label, name)
+        if result is None:
+            raise ValueError(f"Speaker '{label}' not found in meeting {meeting_id}")
+        return result
+
+    async def get_display_name(self, meeting_id: str, label: str) -> str:
+        async with get_db() as db:
+            async with db.execute(
+                "SELECT name FROM speakers WHERE meeting_id = ? AND label = ?",
                 (meeting_id, label),
             ) as cur:
                 row = await cur.fetchone()
-                return dict(row) if row else None
-        finally:
-            await db.close()
+                if row and dict(row).get("name"):
+                    return dict(row)["name"]
+                return label
+
+    async def _get(self, speaker_id: str) -> dict:
+        async with get_db() as db:
+            async with db.execute(
+                "SELECT * FROM speakers WHERE id = ?",
+                (speaker_id,),
+            ) as cur:
+                row = await cur.fetchone()
+                if row is None:
+                    return {"id": speaker_id}
+                return dict(row)

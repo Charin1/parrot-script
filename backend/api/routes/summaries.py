@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from backend.core.exceptions import OllamaUnavailableError
+from backend.core.export import generate_summary_pdf
 from backend.llm.summarizer import MeetingSummarizer
 from backend.storage.repositories.meetings import MeetingsRepository
 from backend.storage.repositories.segments import SegmentsRepository
@@ -90,9 +92,7 @@ async def force_summarize(meeting_id: UUID, body: Optional[SummarizeRequest] = N
     return summary
 
 
-from fastapi.responses import Response, JSONResponse
-from fastapi import Query
-from backend.core.export import generate_summary_pdf
+
 
 @router.get('/{meeting_id}/summary/download')
 async def download_summary(

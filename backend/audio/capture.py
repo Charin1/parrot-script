@@ -140,9 +140,7 @@ class AudioCapture:
             input_device = f":{self.device_index}"
         elif sys.platform == "win32":
             fmt = "dshow"
-            input_device = f"audio={self.device_index}" # Note: Windows users often need string names, but index works in some builds. We use the config value.
-            # Usually dshow expects "audio=Stereo Mix (Realtek(R) Audio)", but we'll try to pass the env string directly
-            input_device = f"audio={settings.audio_device_index}" if isinstance(settings.audio_device_index, str) else f"audio={self.device_index}"
+            input_device = f"audio={self.device_index}"
         else:
             fmt = "pulse" # Default to pulse on linux
             input_device = "default" if str(self.device_index) == "0" else str(self.device_index)

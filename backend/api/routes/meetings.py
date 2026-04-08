@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
+import subprocess
 import time
 from typing import Any, Literal, Optional, AsyncGenerator
 from uuid import UUID
@@ -16,12 +18,16 @@ from pathlib import Path
 
 from backend.assistants import (
     AssistantJoinRequest,
+    CaptureMode,
+    ConsentStatus,
+    AssistantJoinStatus,
     LocalMeetingAssistantProvider,
+    SourcePlatform,
     infer_source_platform,
     resolve_capture_mode,
     serialize_provider_metadata,
 )
-from backend.audio.sources import LocalAudioSource
+from backend.audio.sources import LocalAudioSource, LocalVideoAudioSource
 from backend.config import settings
 
 from backend.core.pipeline import MeetingPipeline
@@ -35,13 +41,35 @@ meetings_repo = MeetingsRepository()
 speakers_repo = SpeakersRepository()
 active_pipelines: dict[str, MeetingPipeline] = {}
 _pipeline_start_tasks: dict[str, asyncio.Task] = {}
+_pipeline_lock = asyncio.Lock()
 assistant_provider = LocalMeetingAssistantProvider()
 
 MeetingStatus = Literal['active', 'recording', 'completed', 'failed']
-CaptureMode = Literal['private', 'assistant']
-SourcePlatform = Literal['local', 'google_meet', 'zoom', 'teams', 'other']
-AssistantJoinStatus = Literal['not_requested', 'pending', 'joined', 'unsupported', 'failed']
-ConsentStatus = Literal['not_needed', 'required', 'pending', 'granted', 'denied', 'unknown']
+RecordingType = Literal['audio', 'video_audio']
+
+
+def normalize_meeting_url_input(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+
+    # Allow explicit schemes, including provider-specific deep links.
+    if "://" in cleaned:
+        return cleaned
+
+    # Common Google Meet share format: just the meeting code.
+    if re.fullmatch(r"[a-z]{3}-[a-z]{4}-[a-z]{3}", cleaned.lower()):
+        return f"https://meet.google.com/{cleaned.lower()}"
+
+    # If it already looks like a hostname/path, default to https.
+    hostish = cleaned.split("/")[0]
+    if "." in hostish:
+        return f"https://{cleaned}"
+
+    return cleaned
 
 
 class RenameSpeakerRequest(BaseModel):
@@ -95,10 +123,7 @@ class UpdateMeetingRequest(BaseModel):
     @field_validator('meeting_url')
     @classmethod
     def normalize_optional_meeting_url(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        cleaned = value.strip()
-        return cleaned or None
+        return normalize_meeting_url_input(value)
 
     @field_validator('assistant_visible_name')
     @classmethod
@@ -117,14 +142,13 @@ class StartMeetingRequest(BaseModel):
     meeting_url: Optional[str] = Field(default=None, max_length=2000)
     source_platform: Optional[SourcePlatform] = None
     assistant_visible_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    recording_type: Optional[RecordingType] = None
+    video_resolution: Optional[str] = Field(default=None, max_length=20)
 
     @field_validator('meeting_url')
     @classmethod
     def normalize_meeting_url(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        cleaned = value.strip()
-        return cleaned or None
+        return normalize_meeting_url_input(value)
 
     @field_validator('assistant_visible_name')
     @classmethod
@@ -143,14 +167,178 @@ async def _start_pipeline(meeting_id: str, pipeline: MeetingPipeline) -> None:
     except asyncio.CancelledError:
         if pipeline.running:
             await pipeline.stop()
-        active_pipelines.pop(meeting_id, None)
+        async with _pipeline_lock:
+            active_pipelines.pop(meeting_id, None)
         raise
     except Exception as exc:
         logger.exception('Pipeline start failed for %s: %s', meeting_id, exc)
-        active_pipelines.pop(meeting_id, None)
-        await meetings_repo.update(meeting_id, status='failed')
+        async with _pipeline_lock:
+            active_pipelines.pop(meeting_id, None)
+        await meetings_repo.update(
+            meeting_id,
+            status='failed',
+            metadata=f"Pipeline start failed: {exc}",
+        )
     finally:
-        _pipeline_start_tasks.pop(meeting_id, None)
+        async with _pipeline_lock:
+            _pipeline_start_tasks.pop(meeting_id, None)
+
+
+async def _stream_media_file(
+    file_path: Path,
+    media_type: str,
+    request: Request,
+) -> Response:
+    """Shared file-streaming helper with HTTP Range support."""
+    if not file_path.exists():
+        kind = 'Audio' if 'audio' in media_type else 'Video'
+        raise HTTPException(status_code=404, detail=f'{kind} not found for this meeting')
+
+    file_size = file_path.stat().st_size
+    range_header = request.headers.get('range')
+
+    if range_header:
+        try:
+            range_val = range_header.strip().replace('bytes=', '')
+            range_start_str, range_end_str = range_val.split('-')
+            range_start = int(range_start_str) if range_start_str else 0
+            range_end = int(range_end_str) if range_end_str else file_size - 1
+        except (ValueError, AttributeError):
+            range_start = 0
+            range_end = file_size - 1
+
+        range_start = max(0, range_start)
+        range_end = min(range_end, file_size - 1)
+        content_length = range_end - range_start + 1
+
+        async def range_generator() -> AsyncGenerator[bytes, None]:
+            async with aiofiles.open(file_path, 'rb') as f:
+                await f.seek(range_start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk = await f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(
+            range_generator(),
+            status_code=206,
+            media_type=media_type,
+            headers={
+                'Content-Range': f'bytes {range_start}-{range_end}/{file_size}',
+                'Content-Length': str(content_length),
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'no-store',
+            },
+        )
+
+    async def full_generator() -> AsyncGenerator[bytes, None]:
+        async with aiofiles.open(file_path, 'rb') as f:
+            while True:
+                chunk = await f.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        full_generator(),
+        media_type=media_type,
+        headers={
+            'Content-Length': str(file_size),
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'no-store',
+        },
+    )
+
+
+def _mux_audio_into_video(video_path: Path, audio_path: Path) -> bool:
+    """Mux WAV audio into MP4 so video playback has an audio track."""
+    if not video_path.exists() or video_path.stat().st_size == 0:
+        return False
+    if not audio_path.exists() or audio_path.stat().st_size == 0:
+        return False
+
+    temp_output = video_path.with_name(f"{video_path.stem}.mux.tmp{video_path.suffix}")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(audio_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(temp_output),
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        logger.warning("FFmpeg not found while muxing audio into video for %s", video_path)
+        return False
+    except Exception as exc:
+        logger.warning("Muxing audio into video failed for %s: %s", video_path, exc)
+        return False
+
+    if result.returncode != 0:
+        stderr_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+        logger.warning(
+            "FFmpeg mux failed for %s (exit=%s): %s",
+            video_path,
+            result.returncode,
+            " | ".join(stderr_lines[-6:]) if stderr_lines else "no stderr",
+        )
+        with contextlib.suppress(Exception):
+            if temp_output.exists():
+                temp_output.unlink()
+        return False
+
+    temp_output.replace(video_path)
+    logger.info("Muxed WAV audio into MP4 for %s", video_path)
+    return True
+
+
+def _video_has_audio_track(video_path: Path) -> bool:
+    if not video_path.exists() or video_path.stat().st_size == 0:
+        return False
+
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(video_path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except Exception:
+        return False
+
+    if result.returncode != 0:
+        return False
+    return any(line.strip() == "audio" for line in result.stdout.splitlines())
+
+
+def _ensure_video_has_audio(video_path: Path, audio_path: Path) -> bool:
+    if _video_has_audio_track(video_path):
+        return True
+    return _mux_audio_into_video(video_path, audio_path)
 
 
 @router.post('/')
@@ -184,68 +372,7 @@ async def get_meeting_audio(meeting_id: UUID, request: Request) -> Response:
         raise HTTPException(status_code=404, detail='Meeting not found')
 
     audio_path = Path(settings.db_path).parent / f"{meeting_id_str}.wav"
-    if not audio_path.exists():
-        raise HTTPException(status_code=404, detail='Audio not found for this meeting')
-
-    file_size = audio_path.stat().st_size
-    range_header = request.headers.get('range')
-
-    if range_header:
-        # Parse "bytes=start-end"
-        try:
-            range_val = range_header.strip().replace('bytes=', '')
-            range_start_str, range_end_str = range_val.split('-')
-            range_start = int(range_start_str) if range_start_str else 0
-            range_end = int(range_end_str) if range_end_str else file_size - 1
-        except (ValueError, AttributeError):
-            range_start = 0
-            range_end = file_size - 1
-
-        range_start = max(0, range_start)
-        range_end = min(range_end, file_size - 1)
-        content_length = range_end - range_start + 1
-
-        async def range_generator() -> AsyncGenerator[bytes, None]:
-            async with aiofiles.open(audio_path, 'rb') as f:
-                await f.seek(range_start)
-                remaining = content_length
-                while remaining > 0:
-                    chunk = await f.read(min(65536, remaining))
-                    if not chunk:
-                        break
-                    remaining -= len(chunk)
-                    yield chunk
-
-        return StreamingResponse(
-            range_generator(),
-            status_code=206,
-            media_type='audio/wav',
-            headers={
-                'Content-Range': f'bytes {range_start}-{range_end}/{file_size}',
-                'Content-Length': str(content_length),
-                'Accept-Ranges': 'bytes',
-                'Cache-Control': 'no-store',
-            },
-        )
-
-    # No Range header: return full file
-    async def full_generator() -> AsyncGenerator[bytes, None]:
-        async with aiofiles.open(audio_path, 'rb') as f:
-            while True:
-                chunk = await f.read(65536)
-                if not chunk:
-                    break
-                yield chunk
-
-    return StreamingResponse(
-        full_generator(),
-        media_type='audio/wav',
-        headers={
-            'Content-Length': str(file_size),
-            'Accept-Ranges': 'bytes',
-            'Cache-Control': 'no-store',
-        },
-    )
+    return await _stream_media_file(audio_path, 'audio/wav', request)
 
 
 
@@ -265,12 +392,14 @@ async def delete_meeting(meeting_id: UUID) -> dict[str, bool]:
     meeting_id_str = str(meeting_id)
     logger.info("Received request to delete meeting: %s", meeting_id_str)
 
-    pipeline = active_pipelines.pop(meeting_id_str, None)
+    async with _pipeline_lock:
+        pipeline = active_pipelines.pop(meeting_id_str, None)
+        task = _pipeline_start_tasks.pop(meeting_id_str, None)
+
     if pipeline is not None:
         logger.info("Stopping active pipeline for meeting: %s", meeting_id_str)
         await pipeline.stop()
 
-    task = _pipeline_start_tasks.pop(meeting_id_str, None)
     if task is not None and not task.done():
         logger.info("Cancelling pipeline start task for meeting: %s", meeting_id_str)
         task.cancel()
@@ -281,7 +410,7 @@ async def delete_meeting(meeting_id: UUID) -> dict[str, bool]:
     if not removed:
         logger.warning("Delete failed: Meeting not found: %s", meeting_id_str)
         raise HTTPException(status_code=404, detail='Meeting not found')
-    
+
     logger.info("Meeting deleted successfully: %s", meeting_id_str)
     return {'deleted': True}
 
@@ -294,8 +423,9 @@ async def start_recording(meeting_id: UUID, body: Optional[StartMeetingRequest] 
     if meeting is None:
         raise HTTPException(status_code=404, detail='Meeting not found')
 
-    if meeting_id_str in active_pipelines:
-        return {'status': 'recording', 'meeting_id': meeting_id_str, 'message': None}
+    async with _pipeline_lock:
+        if meeting_id_str in active_pipelines:
+            return {'status': 'recording', 'meeting_id': meeting_id_str, 'message': None}
 
     body = body or StartMeetingRequest()
 
@@ -344,9 +474,11 @@ async def start_recording(meeting_id: UUID, body: Optional[StartMeetingRequest] 
             )
 
         pipeline = MeetingPipeline(meeting_id_str, capture_source=LocalAudioSource(meeting_id_str))
-        active_pipelines[meeting_id_str] = pipeline
+        async with _pipeline_lock:
+            active_pipelines[meeting_id_str] = pipeline
         start_task = asyncio.create_task(_start_pipeline(meeting_id_str, pipeline))
-        _pipeline_start_tasks[meeting_id_str] = start_task
+        async with _pipeline_lock:
+            _pipeline_start_tasks[meeting_id_str] = start_task
 
         await meetings_repo.update(
             meeting_id_str,
@@ -367,11 +499,26 @@ async def start_recording(meeting_id: UUID, body: Optional[StartMeetingRequest] 
             'message': session.message,
         }
 
-    pipeline = MeetingPipeline(meeting_id_str, capture_source=LocalAudioSource(meeting_id_str))
-    active_pipelines[meeting_id_str] = pipeline
+    # Determine recording type and resolution
+    recording_type = body.recording_type or 'audio'
+    video_resolution = body.video_resolution or settings.video_default_resolution
+
+    if recording_type == 'video_audio':
+        capture_src = LocalVideoAudioSource(
+            meeting_id_str,
+            resolution=video_resolution,
+            ghost_mode=ghost_mode,
+        )
+    else:
+        capture_src = LocalAudioSource(meeting_id_str)
+
+    pipeline = MeetingPipeline(meeting_id_str, capture_source=capture_src)
+    async with _pipeline_lock:
+        active_pipelines[meeting_id_str] = pipeline
 
     start_task = asyncio.create_task(_start_pipeline(meeting_id_str, pipeline))
-    _pipeline_start_tasks[meeting_id_str] = start_task
+    async with _pipeline_lock:
+        _pipeline_start_tasks[meeting_id_str] = start_task
 
     await meetings_repo.update(
         meeting_id_str,
@@ -385,6 +532,8 @@ async def start_recording(meeting_id: UUID, body: Optional[StartMeetingRequest] 
         consent_status='not_needed',
         provider_session_id=None,
         provider_metadata=None,
+        recording_type=recording_type,
+        video_resolution=video_resolution if recording_type == 'video_audio' else None,
     )
     return {'status': 'recording', 'meeting_id': meeting_id_str, 'message': None}
 
@@ -396,13 +545,15 @@ async def stop_recording(meeting_id: UUID) -> dict[str, str]:
     if meeting is None:
         raise HTTPException(status_code=404, detail='Meeting not found')
 
-    task = _pipeline_start_tasks.pop(meeting_id_str, None)
+    async with _pipeline_lock:
+        task = _pipeline_start_tasks.pop(meeting_id_str, None)
     if task is not None and not task.done():
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-    pipeline = active_pipelines.pop(meeting_id_str, None)
+    async with _pipeline_lock:
+        pipeline = active_pipelines.pop(meeting_id_str, None)
     if pipeline is not None:
         await pipeline.stop()
         
@@ -411,6 +562,17 @@ async def stop_recording(meeting_id: UUID) -> dict[str, str]:
         final_duration += max(0.0, time.time() - pipeline.start_epoch)
 
     await meetings_repo.end_meeting(meeting_id_str, final_duration)
+
+    # Ensure completed MP4 includes the captured WAV audio track.
+    video_path = Path(settings.db_path).parent / f"{meeting_id_str}.mp4"
+    audio_path = Path(settings.db_path).parent / f"{meeting_id_str}.wav"
+    if meeting.get("recording_type") == "video_audio":
+        await asyncio.to_thread(_ensure_video_has_audio, video_path, audio_path)
+
+    # Mark video availability if a video file was produced
+    if video_path.exists() and video_path.stat().st_size > 0:
+        await meetings_repo.update(meeting_id_str, has_video=True)
+
     return {'status': 'completed', 'meeting_id': meeting_id_str}
 
 
@@ -428,3 +590,18 @@ async def rename_speaker(meeting_id: UUID, label: str, body: RenameSpeakerReques
         return updated
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get('/{meeting_id}/video')
+async def get_meeting_video(meeting_id: UUID, request: Request) -> Response:
+    meeting_id_str = str(meeting_id)
+    meeting = await meetings_repo.get(meeting_id_str)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail='Meeting not found')
+
+    video_path = Path(settings.db_path).parent / f"{meeting_id_str}.mp4"
+    audio_path = Path(settings.db_path).parent / f"{meeting_id_str}.wav"
+    if meeting.get("recording_type") == "video_audio":
+        # Best-effort: if this is an older recording or mux was missed, repair on access.
+        await asyncio.to_thread(_ensure_video_has_audio, video_path, audio_path)
+    return await _stream_media_file(video_path, 'video/mp4', request)

@@ -3,6 +3,9 @@ export type CaptureMode = 'private' | 'assistant'
 export type SourcePlatform = 'local' | 'google_meet' | 'zoom' | 'teams' | 'other'
 export type AssistantJoinStatus = 'not_requested' | 'pending' | 'joined' | 'unsupported' | 'failed'
 export type ConsentStatus = 'not_needed' | 'required' | 'pending' | 'granted' | 'denied' | 'unknown'
+export type RecordingType = 'audio' | 'video_audio'
+export type VideoResolution = '1280x720' | '854x480' | '1920x1080' | '2560x1440'
+export type PlaybackSyncSource = 'system' | 'transcript' | 'audio' | 'video'
 
 export interface Meeting {
   id: string
@@ -21,6 +24,9 @@ export interface Meeting {
   consent_status: ConsentStatus
   provider_session_id: string | null
   provider_metadata: string | null
+  recording_type: RecordingType
+  video_resolution: string | null
+  has_video: boolean
 }
 
 export interface StartRecordingOptions {
@@ -29,6 +35,8 @@ export interface StartRecordingOptions {
   meeting_url?: string | null
   source_platform?: SourcePlatform | null
   assistant_visible_name?: string | null
+  recording_type?: RecordingType
+  video_resolution?: VideoResolution | null
 }
 
 export interface StartRecordingResult {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Segment } from '../types/models'
+import type { PlaybackSyncSource, Segment } from '../types/models'
 import { api } from '../api/client'
 import { EditIcon, DownloadIcon, BookmarkIcon, SyncIcon } from './icons'
 import { AudioPlayer } from './AudioPlayer'
@@ -7,6 +7,11 @@ import { AudioPlayer } from './AudioPlayer'
 interface Props {
   segments: Segment[]
   meetingId: string | null
+  playbackTime: number
+  playbackPlaying: boolean
+  playbackSource: PlaybackSyncSource
+  onPlaybackTimeChange: (time: number, source: PlaybackSyncSource) => void
+  onPlaybackPlayStateChange: (isPlaying: boolean, source: PlaybackSyncSource) => void
 }
 
 function colorForSpeaker(speaker: string): string {
@@ -29,7 +34,15 @@ function latestStartedSegmentIndex(segments: Array<{ start_time: number }>, curr
   return -1
 }
 
-export function LiveTranscript({ segments, meetingId }: Props) {
+export function LiveTranscript({
+  segments,
+  meetingId,
+  playbackTime,
+  playbackPlaying,
+  playbackSource,
+  onPlaybackTimeChange,
+  onPlaybackPlayStateChange,
+}: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [editingSegmentKey, setEditingSegmentKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
@@ -38,9 +51,7 @@ export function LiveTranscript({ segments, meetingId }: Props) {
   const [optimisticNames, setOptimisticNames] = useState<Record<string, string>>({})
   const [optimisticBookmarks, setOptimisticBookmarks] = useState<Record<string, boolean>>({})
   const [optimisticTexts, setOptimisticTexts] = useState<Record<string, string>>({})
-  const [currentTime, setCurrentTime] = useState(0)
   const [autoScroll, setAutoScroll] = useState(true)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
 
   const audioSrc = useMemo(
     () => meetingId ? api.getAudioUrl(meetingId) : '',
@@ -50,11 +61,11 @@ export function LiveTranscript({ segments, meetingId }: Props) {
   useEffect(() => {
     if (!containerRef.current) return
     if (autoScroll && meetingId) {
-      if (currentTime === 0) {
+      if (playbackTime === 0) {
         containerRef.current.scrollTop = containerRef.current.scrollHeight
       }
     }
-  }, [segments, autoScroll, meetingId, currentTime])
+  }, [segments, autoScroll, meetingId, playbackTime])
 
   useEffect(() => {
     setOptimisticNames({})
@@ -62,9 +73,41 @@ export function LiveTranscript({ segments, meetingId }: Props) {
     setOptimisticTexts({})
     setEditingSegmentKey(null)
     setEditingTextKey(null)
-    setCurrentTime(0)
     setAutoScroll(true)
   }, [meetingId])
+
+  useEffect(() => {
+    if (!segments || segments.length === 0) return
+
+    let changedNames = false
+    const newNames = { ...optimisticNames }
+    let changedTexts = false
+    const newTexts = { ...optimisticTexts }
+    let changedBookmarks = false
+    const newBookmarks = { ...optimisticBookmarks }
+
+    for (const seg of segments) {
+      if (seg.speaker && newNames[seg.speaker] === seg.display_name) {
+        delete newNames[seg.speaker]
+        changedNames = true
+      }
+      const segId = seg.id ?? seg.segment_id ?? ''
+      if (segId) {
+        if (newTexts[segId] === seg.text) {
+          delete newTexts[segId]
+          changedTexts = true
+        }
+        if (newBookmarks[segId] === seg.is_bookmarked) {
+          delete newBookmarks[segId]
+          changedBookmarks = true
+        }
+      }
+    }
+
+    if (changedNames) setOptimisticNames(newNames)
+    if (changedTexts) setOptimisticTexts(newTexts)
+    if (changedBookmarks) setOptimisticBookmarks(newBookmarks)
+  }, [segments])
 
   const grouped = useMemo(() => {
     return segments.map((segment) => ({
@@ -124,6 +167,47 @@ export function LiveTranscript({ segments, meetingId }: Props) {
     setEditValue(currentDisplay)
   }
 
+  const OFFLINE_QUEUE_KEY = `parrot-offline-queue-${meetingId ?? 'none'}`
+
+  const enqueueOffline = (mutation: object) => {
+    try {
+      const raw = localStorage.getItem(OFFLINE_QUEUE_KEY)
+      const queue: object[] = raw ? JSON.parse(raw) : []
+      queue.push(mutation)
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue))
+    } catch {
+      // localStorage may be full or unavailable; silent no-op
+    }
+  }
+
+  const flushOfflineQueue = async (mid: string) => {
+    try {
+      const raw = localStorage.getItem(OFFLINE_QUEUE_KEY)
+      if (!raw) return
+      const queue: Array<{ type: string; payload: Record<string, string> }> = JSON.parse(raw)
+      localStorage.removeItem(OFFLINE_QUEUE_KEY)
+      for (const item of queue) {
+        if (item.type === 'speaker' && item.payload.label && item.payload.name) {
+          await api.updateSpeakerName(mid, item.payload.label, item.payload.name)
+        } else if (item.type === 'text' && item.payload.segmentId && item.payload.text) {
+          await api.updateSegmentText(mid, item.payload.segmentId, item.payload.text)
+        }
+      }
+    } catch {
+      // If flush fails network is still down; queue will persist in localStorage for next reconnect
+    }
+  }
+
+  // Flush any pending offline queue when the browser comes back online
+  useEffect(() => {
+    if (!meetingId) return
+    const handleOnline = () => { void flushOfflineQueue(meetingId) }
+    window.addEventListener('online', handleOnline)
+    // Also try flushing immediately on mount in case we recovered mid-session
+    if (navigator.onLine) { void flushOfflineQueue(meetingId) }
+    return () => window.removeEventListener('online', handleOnline)
+  }, [meetingId])
+
   const saveSpeakerName = async (meetingId: string, originalLabel: string) => {
     const newName = editValue.trim()
     setEditingSegmentKey(null)
@@ -133,10 +217,17 @@ export function LiveTranscript({ segments, meetingId }: Props) {
     // Immediately update UI
     setOptimisticNames(prev => ({ ...prev, [originalLabel]: newName }))
 
+    if (!navigator.onLine) {
+      enqueueOffline({ type: 'speaker', payload: { label: originalLabel, name: newName } })
+      return
+    }
+
     try {
       await api.updateSpeakerName(meetingId, originalLabel, newName)
     } catch (err) {
-      console.error('Failed to rename speaker:', err)
+      // On failure, persist to queue for retry rather than silently dropping
+      enqueueOffline({ type: 'speaker', payload: { label: originalLabel, name: newName } })
+      console.error('Failed to rename speaker, queued for retry:', err)
     }
   }
 
@@ -153,27 +244,24 @@ export function LiveTranscript({ segments, meetingId }: Props) {
 
     setOptimisticTexts(prev => ({ ...prev, [segmentKey]: newText }))
 
+    if (!navigator.onLine) {
+      enqueueOffline({ type: 'text', payload: { segmentId: segmentKey, text: newText } })
+      return
+    }
+
     try {
       await api.updateSegmentText(meetingId, segmentKey, newText)
     } catch (err) {
-      console.error('Failed to update text:', err)
+      enqueueOffline({ type: 'text', payload: { segmentId: segmentKey, text: newText } })
+      console.error('Failed to update text, queued for retry:', err)
     }
   }
 
-  const seekAudio = (time: number) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = time
-      setCurrentTime(time)
-      setAutoScroll(true)
-      void audioRef.current.play().catch(() => { /* user interaction required */ })
-    }
+  const seekPlayback = (time: number) => {
+    onPlaybackTimeChange(time, 'transcript')
+    onPlaybackPlayStateChange(true, 'transcript')
+    setAutoScroll(true)
   }
-
-  const playbackSegmentIdx = latestStartedSegmentIndex(grouped, currentTime)
-  const activeSegmentIdx =
-    playbackSegmentIdx >= 0 && currentTime <= grouped[playbackSegmentIdx].end_time
-      ? playbackSegmentIdx
-      : -1
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -181,14 +269,13 @@ export function LiveTranscript({ segments, meetingId }: Props) {
       return
     }
 
-    const playbackTime = audioRef.current?.currentTime ?? currentTime
     if (playbackTime > 0) {
       scrollToPlaybackPosition(playbackTime)
       return
     }
 
     containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' })
-  }, [autoScroll, currentTime, grouped, segments.length])
+  }, [autoScroll, grouped, playbackTime, segments.length])
 
   const handleUserScroll = () => {
     if (autoScroll) setAutoScroll(false)
@@ -203,10 +290,13 @@ export function LiveTranscript({ segments, meetingId }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap', flex: 1, justifyContent: 'flex-end' }}>
             {/* Custom Audio Player */}
             <AudioPlayer
-              ref={audioRef}
               src={audioSrc}
-              onTimeUpdate={setCurrentTime}
+              onTimeUpdate={(time) => onPlaybackTimeChange(time, 'audio')}
+              onPlayStateChange={(isPlaying) => onPlaybackPlayStateChange(isPlaying, 'audio')}
               maxDuration={segments.length > 0 ? segments[segments.length - 1].end_time : 0}
+              syncTime={playbackTime}
+              syncPlaying={playbackPlaying}
+              syncSource={playbackSource}
             />
 
             {/* Download Buttons */}
@@ -257,8 +347,6 @@ export function LiveTranscript({ segments, meetingId }: Props) {
               className="sync-btn"
               style={{ pointerEvents: 'auto' }}
               onClick={() => {
-                const playbackTime = audioRef.current?.currentTime ?? currentTime
-                setCurrentTime(playbackTime)
                 setAutoScroll(true)
                 if (playbackTime > 0) {
                   scrollToPlaybackPosition(playbackTime)
@@ -356,13 +444,13 @@ export function LiveTranscript({ segments, meetingId }: Props) {
                 onDoubleClick={() => {
                   if (segment.key) startEditingText(segment.key, segment.displayText);
                 }}
-                onClick={() => seekAudio(segment.start_time)}
+                onClick={() => seekPlayback(segment.start_time)}
                 className="segment-text"
                 style={{
                   cursor: 'pointer',
                   padding: '4px',
                   borderRadius: '4px',
-                  backgroundColor: currentTime >= segment.start_time && currentTime <= segment.end_time ? 'var(--bg-active, rgba(238, 191, 165, 0.2))' : 'transparent',
+                  backgroundColor: playbackTime >= segment.start_time && playbackTime <= segment.end_time ? 'var(--bg-active, rgba(238, 191, 165, 0.2))' : 'transparent',
                   transition: 'background-color 0.2s',
                   position: 'relative'
                 }}

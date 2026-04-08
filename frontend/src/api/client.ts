@@ -1,5 +1,5 @@
 import axios, { AxiosError } from 'axios'
-import type { Meeting, SearchResult, Segment, StartRecordingOptions, StartRecordingResult, Summary } from '../types/models'
+import type { Meeting, RecordingType, SearchResult, Segment, StartRecordingOptions, StartRecordingResult, Summary } from '../types/models'
 
 const API_TOKEN_STORAGE_KEY = 'parrot-script-api-token'
 const DEFAULT_BACKEND_PORT = '8000'
@@ -74,6 +74,37 @@ client.interceptors.request.use((config) => {
   return config
 })
 
+// Custom Axios Exponential Backoff Retry Interceptor
+client.interceptors.response.use(undefined, async (error: AxiosError) => {
+  const config = error.config as any
+  if (!config || !config.url) {
+    return Promise.reject(error)
+  }
+
+  // Initialize retry state
+  config._retryCount = config._retryCount ?? 0
+  
+  // Only retry idempotent methods
+  const method = config.method?.toUpperCase()
+  const isIdempotent = ['GET', 'PATCH', 'PUT'].includes(method || '')
+  
+  // Retry on network errors or 5xx server errors
+  const isNetworkError = error.code === 'ECONNABORTED' || error.code === 'ERR_NETWORK' || error.message === 'Network Error'
+  const isServerError = error.response && error.response.status >= 500
+  
+  if (!isIdempotent || (!isNetworkError && !isServerError) || config._retryCount >= 3) {
+    return Promise.reject(error)
+  }
+
+  config._retryCount += 1
+  
+  // Exponential backoff with jitter: 1s, 2s, 4s
+  const backoffDelay = 1000 * (2 ** (config._retryCount - 1)) + Math.random() * 500
+  await new Promise(resolve => setTimeout(resolve, backoffDelay))
+  
+  return client(config)
+})
+
 export function formatApiError(error: unknown): string {
   if (axios.isAxiosError(error)) {
     if (error.response?.status === 401) {
@@ -94,6 +125,18 @@ export function formatApiError(error: unknown): string {
     }
   }
   return 'Unexpected request error'
+}
+
+function downloadBlob(data: BlobPart, filename: string, mimeType?: string): void {
+  const blob = mimeType ? new Blob([data], { type: mimeType }) : new Blob([data])
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.setAttribute('download', filename)
+  document.body.appendChild(link)
+  link.click()
+  link.parentNode?.removeChild(link)
+  window.URL.revokeObjectURL(url)
 }
 
 export const api = {
@@ -134,6 +177,8 @@ export const api = {
     if (options?.assistant_visible_name !== undefined) {
       body.assistant_visible_name = options.assistant_visible_name?.trim() || null
     }
+    if (options?.recording_type) body.recording_type = options.recording_type
+    if (options?.video_resolution !== undefined) body.video_resolution = options.video_resolution
     const { data } = await client.post<StartRecordingResult>(`/meetings/${id}/start`, body)
     return data
   },
@@ -192,36 +237,17 @@ export const api = {
 
   async downloadTranscript(id: string, format: 'json' | 'pdf'): Promise<void> {
     const response = await client.get(`/meetings/${id}/transcript/download?format=${format}`, { responseType: 'blob' })
-    const url = window.URL.createObjectURL(new Blob([response.data]))
-    const link = document.createElement('a')
-    link.href = url
-    link.setAttribute('download', `transcript_${id}.${format}`)
-    document.body.appendChild(link)
-    link.click()
-    link.parentNode?.removeChild(link)
+    downloadBlob(response.data, `transcript_${id}.${format}`)
   },
 
   async downloadSummary(id: string, format: 'json' | 'pdf'): Promise<void> {
     const response = await client.get(`/meetings/${id}/summary/download?format=${format}`, { responseType: 'blob' })
-    const url = window.URL.createObjectURL(new Blob([response.data]))
-    const link = document.createElement('a')
-    link.href = url
-    link.setAttribute('download', `summary_${id}.${format}`)
-    document.body.appendChild(link)
-    link.click()
-    link.parentNode?.removeChild(link)
+    downloadBlob(response.data, `summary_${id}.${format}`)
   },
 
   async downloadAudio(id: string): Promise<void> {
     const response = await client.get(`/meetings/${id}/audio`, { responseType: 'blob' })
-    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'audio/wav' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.setAttribute('download', `audio_${id}.wav`)
-    document.body.appendChild(link)
-    link.click()
-    link.parentNode?.removeChild(link)
-    window.URL.revokeObjectURL(url)
+    downloadBlob(response.data, `audio_${id}.wav`, 'audio/wav')
   },
 
   async toggleBookmark(meetingId: string, segmentId: string, isBookmarked: boolean): Promise<{ id: string, is_bookmarked: boolean }> {
@@ -251,6 +277,22 @@ export const api = {
     }
     url.searchParams.set('_t', String(cacheBust))
     return url.toString()
+  },
+
+  getVideoUrl(meetingId: string): string {
+    const token = getApiToken()
+    const cacheBust = Date.now()
+    const url = new URL(`/api/meetings/${meetingId}/video`, `${getBackendOrigin()}/`)
+    if (token) {
+      url.searchParams.set('token', token)
+    }
+    url.searchParams.set('_t', String(cacheBust))
+    return url.toString()
+  },
+
+  async downloadVideo(id: string): Promise<void> {
+    const response = await client.get(`/meetings/${id}/video`, { responseType: 'blob' })
+    downloadBlob(response.data, `video_${id}.mp4`, 'video/mp4')
   },
 }
 

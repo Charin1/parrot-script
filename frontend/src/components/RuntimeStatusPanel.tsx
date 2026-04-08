@@ -5,6 +5,8 @@ interface Props {
   browserOnline: boolean
   backendReachability: BackendReachability
   streamState: StreamConnectionState
+  lowBandwidth: boolean
+  onToggleLowBandwidth: () => void
 }
 
 function backendLabel(state: BackendReachability): string {
@@ -54,7 +56,7 @@ function streamBadge(state: StreamConnectionState): string {
   return 'badge-idle'
 }
 
-export function RuntimeStatusPanel({ browserOnline, backendReachability, streamState }: Props) {
+export function RuntimeStatusPanel({ browserOnline, backendReachability, streamState, lowBandwidth, onToggleLowBandwidth }: Props) {
   return (
     <div className="panel runtime-panel">
       <div className="panel-header">
@@ -79,6 +81,24 @@ export function RuntimeStatusPanel({ browserOnline, backendReachability, streamS
         <article className="runtime-card">
           <span className={`badge ${streamBadge(streamState)}`}>{streamLabel(streamState)}</span>
           <p className="muted">Socket retries back off automatically after disconnects.</p>
+        </article>
+        <article className="runtime-card">
+          <span className={`badge ${lowBandwidth ? 'badge-idle' : 'badge-ok'}`}>
+            {lowBandwidth ? 'Low Bandwidth' : 'Full Quality'}
+          </span>
+          <p className="muted">
+            {lowBandwidth
+              ? 'Audio player and video preload disabled to save bandwidth.'
+              : 'All media features active. Enable low-bandwidth mode on slow networks.'}
+          </p>
+          <button
+            type="button"
+            className="secondary"
+            onClick={onToggleLowBandwidth}
+            style={{ marginTop: '0.4rem', fontSize: '0.75rem', padding: '0.25rem 0.6rem' }}
+          >
+            {lowBandwidth ? 'Disable Low Bandwidth' : 'Enable Low Bandwidth'}
+          </button>
         </article>
       </div>
     </div>

@@ -4,8 +4,10 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
+from backend.core.export import generate_transcript_pdf
 from backend.storage.repositories.meetings import MeetingsRepository
 from backend.storage.repositories.segments import SegmentsRepository
 import logging
@@ -43,9 +45,7 @@ async def get_transcript(
         'total': total,
     }
 
-from fastapi.responses import Response, JSONResponse
-import json
-from backend.core.export import generate_transcript_pdf
+
 
 @router.get('/{meeting_id}/transcript/download')
 async def download_transcript(

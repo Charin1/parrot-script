@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     audio_chunk_seconds: int = 5
     audio_vad_aggressiveness: int = 2
 
+    # Video / Screen capture
+    video_default_resolution: str = "1280x720"
+    video_framerate: int = 15
+    video_codec: str = "libx264"
+    video_crf: int = 23
+    video_output_format: str = "mp4"
+    video_screen_index: int = 0
+
     # Ollama
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "mistral:7b-instruct"
