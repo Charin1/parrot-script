@@ -23,6 +23,7 @@ venv/
 *.sqlite
 /data/chroma/
 /data/*.db
+/data/*.mp4
 
 # Logs
 *.log

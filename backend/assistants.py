@@ -37,16 +37,71 @@ class AssistantSession:
 
 
 class MeetingLinkLauncher:
-    def launch(self, meeting_url: str) -> None:
+    def launch(
+        self,
+        meeting_url: str,
+        source_platform: SourcePlatform = "other",
+        assistant_visible_name: str = "Parrot Script Assistant",
+    ) -> str:
+        """Launch meeting URL and return the launch strategy label."""
+        if source_platform == "google_meet":
+            strategy = self._launch_google_meet_guest_window(meeting_url)
+            if strategy is not None:
+                return strategy
+
         if sys.platform == "darwin":
             subprocess.run(["open", meeting_url], check=True, timeout=10)
-            return
+            return "default_browser_open"
 
         if sys.platform == "win32":
             os.startfile(meeting_url)  # type: ignore[attr-defined]
-            return
+            return "default_browser_open"
 
         subprocess.run(["xdg-open", meeting_url], check=True, timeout=10)
+        return "default_browser_open"
+
+    def _launch_google_meet_guest_window(self, meeting_url: str) -> str | None:
+        candidates: list[tuple[str, list[str]]]
+        if sys.platform == "darwin":
+            candidates = [
+                (
+                    "chrome_guest_window",
+                    ["open", "-na", "Google Chrome", "--args", "--new-window", "--guest", meeting_url],
+                ),
+                (
+                    "chrome_incognito_window",
+                    ["open", "-na", "Google Chrome", "--args", "--new-window", "--incognito", meeting_url],
+                ),
+                (
+                    "chromium_incognito_window",
+                    ["open", "-na", "Chromium", "--args", "--new-window", "--incognito", meeting_url],
+                ),
+                (
+                    "edge_inprivate_window",
+                    ["open", "-na", "Microsoft Edge", "--args", "--new-window", "--inprivate", meeting_url],
+                ),
+            ]
+        elif sys.platform == "win32":
+            candidates = [
+                ("chrome_guest_window", ["chrome", "--new-window", "--guest", meeting_url]),
+                ("chrome_incognito_window", ["chrome", "--new-window", "--incognito", meeting_url]),
+                ("edge_inprivate_window", ["msedge", "--new-window", "--inprivate", meeting_url]),
+            ]
+        else:
+            candidates = [
+                ("chrome_guest_window", ["google-chrome", "--new-window", "--guest", meeting_url]),
+                ("chrome_incognito_window", ["google-chrome", "--new-window", "--incognito", meeting_url]),
+                ("chromium_incognito_window", ["chromium", "--new-window", "--incognito", meeting_url]),
+                ("edge_inprivate_window", ["microsoft-edge", "--new-window", "--inprivate", meeting_url]),
+            ]
+
+        for strategy, cmd in candidates:
+            try:
+                subprocess.run(cmd, check=True, timeout=10)
+                return strategy
+            except (FileNotFoundError, OSError, subprocess.SubprocessError):
+                continue
+        return None
 
     def describe(self) -> str:
         if sys.platform == "darwin":
@@ -80,7 +135,12 @@ class LocalMeetingAssistantProvider:
 
     async def request_join(self, request: AssistantJoinRequest) -> AssistantSession:
         try:
-            await asyncio.to_thread(self.launcher.launch, request.meeting_url)
+            launch_strategy = await asyncio.to_thread(
+                self.launcher.launch,
+                request.meeting_url,
+                request.source_platform,
+                request.assistant_visible_name,
+            )
         except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
             return AssistantSession(
                 join_status="failed",
@@ -89,7 +149,7 @@ class LocalMeetingAssistantProvider:
                 provider_metadata={
                     "meeting_url": request.meeting_url,
                     "assistant_visible_name": request.assistant_visible_name,
-                    "launch_strategy": "local_link_launch",
+                    "launch_strategy": "local_link_launch_failed",
                     "launched_via": self.launcher.describe(),
                     "reason": str(exc),
                 },
@@ -99,7 +159,11 @@ class LocalMeetingAssistantProvider:
                 ),
             )
 
-        manual_steps = launch_manual_steps(request.source_platform)
+        manual_steps = launch_manual_steps(
+            request.source_platform,
+            request.assistant_visible_name,
+            launch_strategy,
+        )
         display_name_note = display_name_note_for(request.source_platform, request.assistant_visible_name)
         return AssistantSession(
             join_status="pending",
@@ -109,10 +173,15 @@ class LocalMeetingAssistantProvider:
             provider_metadata={
                 "meeting_url": request.meeting_url,
                 "assistant_visible_name": request.assistant_visible_name,
-                "launch_strategy": "local_link_launch",
+                "launch_strategy": launch_strategy,
                 "launched_via": self.launcher.describe(),
                 "manual_steps": manual_steps,
                 "speaker_identity_level": "heuristic",
+                "speaker_identity_reason": (
+                    "Assistant mode currently transcribes one mixed local audio stream. "
+                    "Participant-aware/stream-aware provider mapping is not connected yet."
+                ),
+                "capture_topology": "local_mixed_audio",
                 "display_name_note": display_name_note,
             },
             message=build_launch_message(
@@ -168,11 +237,23 @@ def platform_label(source_platform: SourcePlatform) -> str:
     return "meeting"
 
 
-def launch_manual_steps(source_platform: SourcePlatform) -> list[str]:
+def launch_manual_steps(
+    source_platform: SourcePlatform,
+    assistant_visible_name: str | None = None,
+    launch_strategy: str | None = None,
+) -> list[str]:
     if source_platform == "google_meet":
+        guest_hint = (
+            "A guest/private browser window was opened for Meet."
+            if launch_strategy and ("guest" in launch_strategy or "incognito" in launch_strategy or "inprivate" in launch_strategy)
+            else "The meeting link was opened in your browser."
+        )
+        name = assistant_visible_name or "Parrot Script Assistant"
         return [
-            "The meeting link was opened in your browser.",
-            'In the Meet window, click "Join now" or "Ask to join".',
+            guest_hint,
+            f'If prompted for a guest name, enter "{name}" and click "Ask to join".',
+            'If you are already signed in, click "Join now" to enter as that account.',
+            "Ensure meeting output is routed to your configured capture device so transcript audio is recorded.",
         ]
     if source_platform == "zoom":
         return [

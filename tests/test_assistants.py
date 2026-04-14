@@ -8,10 +8,11 @@ class FakeLauncher:
         self.should_fail = should_fail
         self.launched_urls: list[str] = []
 
-    def launch(self, meeting_url: str) -> None:
+    def launch(self, meeting_url: str, source_platform: str = "other", assistant_visible_name: str = "Parrot Script Assistant") -> str:
         if self.should_fail:
             raise OSError("launcher unavailable")
         self.launched_urls.append(meeting_url)
+        return "fake-launch-strategy"
 
     def describe(self) -> str:
         return "fake-launcher"
@@ -38,7 +39,9 @@ def test_local_assistant_provider_launches_meeting_link() -> None:
     assert session.consent_status == "required"
     assert session.provider_session_id is not None
     assert session.provider_metadata is not None
-    assert session.provider_metadata["launch_strategy"] == "local_link_launch"
+    assert session.provider_metadata["launch_strategy"] == "fake-launch-strategy"
+    assert session.provider_metadata["speaker_identity_level"] == "heuristic"
+    assert "mixed local audio stream" in str(session.provider_metadata["speaker_identity_reason"]).lower()
     assert "live capture has started" in (session.message or "").lower()
 
 

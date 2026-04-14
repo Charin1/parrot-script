@@ -286,6 +286,29 @@ npm run build
 - Run `.venv/bin/python scripts/list_audio_devices.py`
 - Set the correct `AUDIO_DEVICE_INDEX` in `.env`
 - If you want system audio, confirm BlackHole is installed and routed correctly
+- On macOS, Parrot Script now fast-fails when FFmpeg cannot open the selected input and shows a device/permission error instead of silently recording silence
+
+### Assistant mode speaker labels
+
+- Current local assistant mode joins/open the meeting link and records a single mixed local audio stream
+- Speaker labels are heuristic diarization (`Speaker 1`, `Speaker 2`, etc.) and can be renamed in the UI
+- True per-participant attribution requires provider participant events or per-participant media streams (not yet wired in this local-only provider path)
+
+### Native attribution API (Option 2 foundation)
+
+Parrot Script now includes first-party, modular participant attribution endpoints:
+
+- `PUT /api/meetings/{id}/native/participants`: upsert provider participants
+- `PUT /api/meetings/{id}/native/speaking-events`: sync speaking intervals
+- `POST /api/meetings/{id}/native/attribution/recompute`: map transcript segments to participants
+- `GET /api/meetings/{id}/native/participants`: inspect synced participants
+
+Architecture:
+
+- API route layer: `backend/api/routes/native.py`
+- Service layer: `backend/native/service.py`
+- Storage layer: `backend/storage/repositories/participants.py`
+- Transcript read model enrichment: `backend/storage/repositories/segments.py`
 
 ### No video captured on macOS
 

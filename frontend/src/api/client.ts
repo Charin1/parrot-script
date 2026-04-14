@@ -1,5 +1,15 @@
 import axios, { AxiosError } from 'axios'
-import type { Meeting, RecordingType, SearchResult, Segment, StartRecordingOptions, StartRecordingResult, Summary } from '../types/models'
+import type {
+  Meeting,
+  NativeParticipant,
+  NativeSpeakingEvent,
+  RecordingType,
+  SearchResult,
+  Segment,
+  StartRecordingOptions,
+  StartRecordingResult,
+  Summary,
+} from '../types/models'
 
 const API_TOKEN_STORAGE_KEY = 'parrot-script-api-token'
 const DEFAULT_BACKEND_PORT = '8000'
@@ -266,6 +276,39 @@ export const api = {
 
   async deleteMeeting(id: string): Promise<void> {
     await client.delete(`/meetings/${id}`)
+  },
+
+  async listNativeParticipants(meetingId: string): Promise<NativeParticipant[]> {
+    const { data } = await client.get<{ items: NativeParticipant[] }>(`/meetings/${meetingId}/native/participants`)
+    return data.items
+  },
+
+  async syncNativeParticipants(meetingId: string, participants: NativeParticipant[]): Promise<{ participants_synced: number }> {
+    const { data } = await client.put<{ participants_synced: number }>(`/meetings/${meetingId}/native/participants`, {
+      participants,
+    })
+    return data
+  },
+
+  async syncNativeSpeakingEvents(
+    meetingId: string,
+    events: NativeSpeakingEvent[],
+    source = 'native_provider_event'
+  ): Promise<{ events_received: number; events_inserted: number; events_dropped: number }> {
+    const { data } = await client.put<{ events_received: number; events_inserted: number; events_dropped: number }>(
+      `/meetings/${meetingId}/native/speaking-events`,
+      { events, source },
+    )
+    return data
+  },
+
+  async recomputeNativeAttribution(
+    meetingId: string,
+  ): Promise<{ segments_total: number; segments_mapped: number; segments_unmapped: number }> {
+    const { data } = await client.post<{ segments_total: number; segments_mapped: number; segments_unmapped: number }>(
+      `/meetings/${meetingId}/native/attribution/recompute`
+    )
+    return data
   },
 
   getAudioUrl(meetingId: string): string {

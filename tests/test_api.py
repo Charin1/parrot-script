@@ -211,6 +211,92 @@ def test_private_mode_start_keeps_recording_flow(tmp_path, monkeypatch) -> None:
     assert body['assistant_join_status'] == 'not_requested'
 
 
+def test_native_participant_attribution_recompute_maps_segments(tmp_path) -> None:
+    client = setup_test_db(tmp_path)
+
+    created = client.post(
+        '/api/meetings/',
+        json={'title': 'Native Attribution'},
+        headers=auth_headers(),
+    )
+    assert created.status_code == 200
+    meeting_id = created.json()['id']
+
+    async def seed_segments() -> None:
+        repo = SegmentsRepository()
+        await repo.insert(
+            TranscriptSegmentEvent(
+                meeting_id=meeting_id,
+                speaker='Speaker 1',
+                text='First segment',
+                start_time=0.0,
+                end_time=4.0,
+                confidence=0.9,
+                segment_id=str(uuid4()),
+            )
+        )
+        await repo.insert(
+            TranscriptSegmentEvent(
+                meeting_id=meeting_id,
+                speaker='Speaker 2',
+                text='Second segment',
+                start_time=5.0,
+                end_time=9.0,
+                confidence=0.9,
+                segment_id=str(uuid4()),
+            )
+        )
+
+    asyncio.run(seed_segments())
+
+    sync_participants = client.put(
+        f'/api/meetings/{meeting_id}/native/participants',
+        json={
+            'participants': [
+                {'external_id': 'p1', 'display_name': 'Alice'},
+                {'external_id': 'p2', 'display_name': 'Bob'},
+            ]
+        },
+        headers=auth_headers(),
+    )
+    assert sync_participants.status_code == 200
+    assert sync_participants.json()['participants_synced'] == 2
+
+    sync_events = client.put(
+        f'/api/meetings/{meeting_id}/native/speaking-events',
+        json={
+            'events': [
+                {'participant_external_id': 'p1', 'start_time': 0.0, 'end_time': 4.0},
+                {'participant_external_id': 'p2', 'start_time': 5.0, 'end_time': 9.0},
+            ],
+            'source': 'native_google_meet',
+        },
+        headers=auth_headers(),
+    )
+    assert sync_events.status_code == 200
+    assert sync_events.json()['events_inserted'] == 2
+
+    recompute = client.post(
+        f'/api/meetings/{meeting_id}/native/attribution/recompute',
+        headers=auth_headers(),
+    )
+    assert recompute.status_code == 200
+    summary = recompute.json()
+    assert summary['segments_total'] == 2
+    assert summary['segments_mapped'] == 2
+
+    transcript = client.get(
+        f'/api/meetings/{meeting_id}/transcript?page=1&limit=10',
+        headers=auth_headers(),
+    )
+    assert transcript.status_code == 200
+    items = transcript.json()['items']
+    assert items[0]['participant_name'] == 'Alice'
+    assert items[0]['speaker_identity_level'] == 'participant-aware'
+    assert items[1]['participant_name'] == 'Bob'
+    assert items[1]['speaker_identity_level'] == 'participant-aware'
+
+
 def test_delete_meeting_with_related_rows(tmp_path) -> None:
     client = setup_test_db(tmp_path)
 

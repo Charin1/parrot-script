@@ -58,8 +58,48 @@ CREATE TABLE IF NOT EXISTS speakers (
     color TEXT
 );
 
+CREATE TABLE IF NOT EXISTS meeting_participants (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    is_host BOOLEAN DEFAULT 0,
+    is_bot BOOLEAN DEFAULT 0,
+    joined_at REAL,
+    left_at REAL,
+    metadata TEXT,
+    created_at DATETIME DEFAULT (datetime('now')),
+    UNIQUE(meeting_id, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS participant_speaking_events (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    participant_id TEXT NOT NULL REFERENCES meeting_participants(id) ON DELETE CASCADE,
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    confidence REAL,
+    source TEXT,
+    created_at DATETIME DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS segment_participant_attribution (
+    segment_id TEXT PRIMARY KEY REFERENCES transcript_segments(id) ON DELETE CASCADE,
+    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+    participant_id TEXT NOT NULL REFERENCES meeting_participants(id) ON DELETE CASCADE,
+    confidence REAL,
+    attribution_source TEXT,
+    created_at DATETIME DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_segments_meeting
     ON transcript_segments(meeting_id, start_time);
+CREATE INDEX IF NOT EXISTS idx_meeting_participants_meeting
+    ON meeting_participants(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_speaking_events_meeting
+    ON participant_speaking_events(meeting_id, start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_attribution_meeting
+    ON segment_participant_attribution(meeting_id);
 """
 
 
@@ -124,4 +164,3 @@ async def init_db() -> None:
                 await db.execute("ALTER TABLE transcript_segments ADD COLUMN is_bookmarked BOOLEAN DEFAULT 0")
 
         await db.commit()
-

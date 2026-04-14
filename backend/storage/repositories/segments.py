@@ -26,7 +26,22 @@ class SegmentsRepository:
     async def get_by_meeting(self, meeting_id: str, limit: int = 500, offset: int = 0) -> list[dict]:
         async with get_db() as db:
             async with db.execute(
-                "SELECT * FROM transcript_segments WHERE meeting_id = ? ORDER BY start_time ASC LIMIT ? OFFSET ?",
+                """
+                SELECT
+                    ts.*,
+                    spa.confidence AS participant_confidence,
+                    spa.attribution_source AS attribution_source,
+                    mp.external_id AS participant_external_id,
+                    mp.display_name AS participant_name
+                FROM transcript_segments ts
+                LEFT JOIN segment_participant_attribution spa
+                    ON spa.segment_id = ts.id
+                LEFT JOIN meeting_participants mp
+                    ON mp.id = spa.participant_id
+                WHERE ts.meeting_id = ?
+                ORDER BY ts.start_time ASC
+                LIMIT ? OFFSET ?
+                """,
                 (meeting_id, limit, offset),
             ) as cur:
                 rows = await cur.fetchall()
@@ -45,6 +60,20 @@ class SegmentsRepository:
             ) as cur:
                 row = await cur.fetchone()
                 return dict(row)["cnt"] if row else 0
+
+    async def get_segment_windows(self, meeting_id: str) -> list[dict]:
+        async with get_db() as db:
+            async with db.execute(
+                """
+                SELECT id, start_time, end_time
+                FROM transcript_segments
+                WHERE meeting_id = ?
+                ORDER BY start_time ASC
+                """,
+                (meeting_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+                return [dict(row) for row in rows]
 
     async def update_speaker(self, meeting_id: str, original_label: str, new_name: str) -> int:
         async with get_db() as db:
@@ -100,4 +129,6 @@ class SegmentsRepository:
     def _normalize(row) -> dict:
         d = dict(row)
         d["is_bookmarked"] = bool(d.get("is_bookmarked", False))
+        participant_name = d.get("participant_name")
+        d["speaker_identity_level"] = "participant-aware" if participant_name else "heuristic"
         return d

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import subprocess
 import threading
@@ -39,6 +40,7 @@ class AudioCapture:
             sample_rate=self.sample_rate,
         )
         self._start_offset_s: float = 0.0
+        self._resolved_device_index: int | str | None = None
 
     async def start(self) -> None:
         """Launch FFmpeg subprocess and start background reader thread."""
@@ -82,15 +84,36 @@ class AudioCapture:
                 self._wav_file.setframerate(self.sample_rate)
 
         self._loop = asyncio.get_running_loop()
-        self._process = subprocess.Popen(
-            self._build_ffmpeg_cmd(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-        )
+        try:
+            self._process = subprocess.Popen(
+                self._build_ffmpeg_cmd(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+        except FileNotFoundError as exc:
+            self._cleanup_start_failure()
+            raise AudioCaptureError(
+                "FFmpeg is not installed or not available on PATH. Install ffmpeg and retry."
+            ) from exc
+        except Exception as exc:
+            self._cleanup_start_failure()
+            raise AudioCaptureError(f"Failed to start ffmpeg audio capture process: {exc}") from exc
+
+        # Fast-fail if ffmpeg exits immediately (invalid device index, permissions, etc).
+        await asyncio.sleep(0.45)
+        if self._process.poll() is not None:
+            stderr_output = ""
+            if self._process.stderr is not None:
+                with contextlib.suppress(Exception):
+                    stderr_output = self._process.stderr.read().decode(errors="replace")
+            message = self._format_start_error(self._process.returncode, stderr_output)
+            self._cleanup_start_failure()
+            raise AudioCaptureError(message)
 
         if self._process.stdout is None:
-            raise AudioCaptureError("Failed to open FFmpeg stdout pipe")
+            self._cleanup_start_failure()
+            raise AudioCaptureError("Failed to open ffmpeg stdout pipe for audio capture.")
 
         self._running = True
         self._reader_thread_handle = threading.Thread(target=self._reader_thread, daemon=True)
@@ -134,16 +157,19 @@ class AudioCapture:
 
     def _build_ffmpeg_cmd(self) -> list[str]:
         import sys
-        
+
+        resolved_device = self._resolve_device_index()
+        self._resolved_device_index = resolved_device
+
         if sys.platform == "darwin":
             fmt = "avfoundation"
-            input_device = f":{self.device_index}"
+            input_device = f":{resolved_device}"
         elif sys.platform == "win32":
             fmt = "dshow"
-            input_device = f"audio={self.device_index}"
+            input_device = f"audio={resolved_device}"
         else:
             fmt = "pulse" # Default to pulse on linux
-            input_device = "default" if str(self.device_index) == "0" else str(self.device_index)
+            input_device = "default" if str(resolved_device) == "0" else str(resolved_device)
 
         return [
             "ffmpeg",
@@ -163,6 +189,109 @@ class AudioCapture:
             "65536",
             "pipe:1",
         ]
+
+    def _resolve_device_index(self) -> int | str:
+        import sys
+
+        configured = self.device_index
+        if sys.platform != "darwin":
+            return configured
+
+        from backend.audio.devices import find_blackhole_device, list_audio_devices
+
+        devices = list_audio_devices()
+        if not devices:
+            raise AudioCaptureError(
+                "No macOS AVFoundation audio devices were detected. "
+                "Check microphone permissions and ensure at least one input/system-routing device exists."
+            )
+
+        available_indexes: list[int] = []
+        for device in devices:
+            index = device.get("index")
+            if isinstance(index, int):
+                available_indexes.append(index)
+                continue
+            try:
+                available_indexes.append(int(index))
+            except (TypeError, ValueError):
+                continue
+
+        if not available_indexes:
+            raise AudioCaptureError(
+                "Audio devices were listed, but no valid numeric device indexes were parsed for macOS capture."
+            )
+
+        if configured in available_indexes:
+            return configured
+
+        blackhole = find_blackhole_device()
+        if blackhole is not None:
+            logger.warning(
+                "AUDIO_DEVICE_INDEX=%s is not available. Falling back to detected BlackHole index %s.",
+                configured,
+                blackhole,
+            )
+            return blackhole
+
+        fallback = available_indexes[0]
+        logger.warning(
+            "AUDIO_DEVICE_INDEX=%s is not available. Falling back to first detected audio device index %s.",
+            configured,
+            fallback,
+        )
+        return fallback
+
+    def _cleanup_start_failure(self) -> None:
+        self._running = False
+
+        if self._process is not None:
+            with contextlib.suppress(Exception):
+                self._process.terminate()
+                self._process.wait(timeout=1)
+            with contextlib.suppress(Exception):
+                self._process.kill()
+            self._process = None
+
+        if self._wav_file is not None:
+            with contextlib.suppress(Exception):
+                self._wav_file.close()
+            self._wav_file = None
+
+    def _format_start_error(self, exit_code: int | None, stderr_output: str) -> str:
+        import sys
+
+        stderr_lower = stderr_output.lower()
+        tail_lines = [line.strip() for line in stderr_output.splitlines() if line.strip()]
+        tail = " | ".join(tail_lines[-6:]) if tail_lines else "No ffmpeg stderr output."
+
+        if sys.platform == "darwin":
+            if (
+                "invalid audio device index" in stderr_lower
+                or "cannot open input device" in stderr_lower
+                or "input/output error" in stderr_lower
+                or "device not found" in stderr_lower
+            ):
+                resolved_hint = (
+                    f"Resolved index was {self._resolved_device_index}. "
+                    if self._resolved_device_index is not None
+                    else ""
+                )
+                return (
+                    "Unable to open macOS audio capture device. "
+                    f"{resolved_hint}Run `.venv/bin/python scripts/list_audio_devices.py`, set `AUDIO_DEVICE_INDEX`, "
+                    "and route meeting audio to that device (for example BlackHole). "
+                    f"ffmpeg exit={exit_code}. Details: {tail}"
+                )
+            if "not authorized" in stderr_lower or "permission" in stderr_lower:
+                return (
+                    "macOS blocked audio capture permissions for the host process. "
+                    "Allow Microphone access for Terminal/iTerm/Python in System Settings > Privacy & Security > Microphone, "
+                    "then restart the app. "
+                    f"ffmpeg exit={exit_code}. Details: {tail}"
+                )
+
+        return f"Audio capture failed to start (ffmpeg exit={exit_code}). Details: {tail}"
 
     def _stderr_thread(self) -> None:
         assert self._process is not None

@@ -148,6 +148,26 @@ export function MeetingControls({ meeting, liveDurationS = 0, onStart, onStop, b
 
   // All config controls are disabled once the session is active
   const controlsLocked = busy || sessionActive
+  let providerMetadata: Record<string, unknown> | null = null
+  if (meeting.provider_metadata) {
+    try {
+      const parsed = JSON.parse(meeting.provider_metadata) as Record<string, unknown>
+      providerMetadata = parsed && typeof parsed === 'object' ? parsed : null
+    } catch {
+      providerMetadata = null
+    }
+  }
+  const rawSpeakerIdentityLevel = providerMetadata?.speaker_identity_level
+  const speakerIdentityLevel =
+    typeof rawSpeakerIdentityLevel === 'string' ? rawSpeakerIdentityLevel : null
+  const assistantModeSpeakerHint =
+    captureMode === 'assistant' || meeting.capture_mode === 'assistant'
+      ? speakerIdentityLevel === 'participant-aware'
+        ? 'Speaker attribution: participant-aware (uses meeting participant metadata).'
+        : speakerIdentityLevel === 'stream-aware'
+          ? 'Speaker attribution: stream-aware (near per-participant audio attribution).'
+          : 'Speaker attribution: heuristic from mixed local audio (best-effort; speaker names may need manual rename).'
+      : null
 
   return (
     <div className="controls-panel">
@@ -175,6 +195,9 @@ export function MeetingControls({ meeting, liveDurationS = 0, onStart, onStop, b
                 ? 'Ghost mode ON keeps capture fully on this device and invisible to other participants.'
                 : 'Ghost mode OFF opens the meeting link on this device and starts visible, real-time capture. Provider join prompts and visible name rules still come from Meet, Zoom, or Teams.'}
             </p>
+            {assistantModeSpeakerHint ? (
+              <p className="muted">{assistantModeSpeakerHint}</p>
+            ) : null}
 
             {captureMode === 'assistant' ? (
               <div className="start-config-row">
@@ -261,6 +284,7 @@ export function MeetingControls({ meeting, liveDurationS = 0, onStart, onStop, b
                 ? 'Ghost mode ON'
                 : `Assistant state: ${joinState ? joinState.replace(/_/g, ' ') : 'pending'}`}
             </span>
+            {assistantModeSpeakerHint ? <span className="muted">{assistantModeSpeakerHint}</span> : null}
           </div>
         )}
       </div>

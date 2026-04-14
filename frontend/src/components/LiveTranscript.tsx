@@ -113,7 +113,11 @@ export function LiveTranscript({
     return segments.map((segment) => ({
       ...segment,
       key: segment.id ?? segment.segment_id ?? `${segment.start_time}-${segment.text}`,
-      displaySpeaker: optimisticNames[segment.speaker] || segment.display_name || segment.speaker,
+      displaySpeaker:
+        segment.participant_name ||
+        optimisticNames[segment.speaker] ||
+        segment.display_name ||
+        segment.speaker,
       displayText: optimisticTexts[segment.id ?? segment.segment_id ?? ''] || segment.text,
       isBookmarked: optimisticBookmarks[segment.id ?? segment.segment_id ?? ''] ?? segment.is_bookmarked ?? false
     }))
@@ -364,7 +368,15 @@ export function LiveTranscript({
         {grouped.map((segment) => (
           <article key={segment.key} id={`segment-${segment.key}`} className="transcript-segment">
             <header>
-              {editingSegmentKey === segment.key ? (
+              {segment.participant_name ? (
+                <span
+                  className="speaker-pill"
+                  style={{ backgroundColor: colorForSpeaker(segment.speaker), color: '#fff' }}
+                  title="Participant name from native provider events"
+                >
+                  {segment.displaySpeaker}
+                </span>
+              ) : editingSegmentKey === segment.key ? (
                 <input
                   type="text"
                   autoFocus
@@ -396,6 +408,11 @@ export function LiveTranscript({
               <span className="time-pill">
                 {segment.start_time.toFixed(1)}s - {segment.end_time.toFixed(1)}s
               </span>
+              {segment.speaker_identity_level === 'participant-aware' ? (
+                <span className="time-pill" title="Attributed from participant speaking events">
+                  Participant-aware
+                </span>
+              ) : null}
               <button
                 type="button"
                 className="bookmark-btn"

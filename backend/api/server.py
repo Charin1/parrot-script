@@ -10,6 +10,7 @@ from fastapi.responses import Response
 
 from backend.api.auth import auth_enabled, verify_http_request, verify_websocket_request
 from backend.api.routes.meetings import router as meetings_router
+from backend.api.routes.native import router as native_router
 from backend.api.routes.search import router as search_router
 from backend.api.routes.summaries import router as summaries_router
 from backend.api.routes.transcripts import router as transcripts_router
@@ -54,6 +55,7 @@ app.include_router(meetings_router)
 app.include_router(transcripts_router)
 app.include_router(summaries_router)
 app.include_router(search_router)
+app.include_router(native_router)
 
 
 @app.get("/health")

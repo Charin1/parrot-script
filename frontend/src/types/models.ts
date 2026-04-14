@@ -45,12 +45,34 @@ export interface StartRecordingResult {
   message: string | null
 }
 
+export interface NativeParticipant {
+  external_id: string
+  display_name: string
+  is_host?: boolean
+  is_bot?: boolean
+  joined_at?: number | null
+  left_at?: number | null
+  metadata?: Record<string, unknown> | null
+}
+
+export interface NativeSpeakingEvent {
+  participant_external_id: string
+  start_time: number
+  end_time: number
+  confidence?: number | null
+}
+
 export interface Segment {
   id?: string
   segment_id?: string
   meeting_id: string
   speaker: string
   display_name?: string
+  participant_external_id?: string | null
+  participant_name?: string | null
+  participant_confidence?: number | null
+  attribution_source?: string | null
+  speaker_identity_level?: 'heuristic' | 'participant-aware' | 'stream-aware'
   text: string
   start_time: number
   end_time: number
