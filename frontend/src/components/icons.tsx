@@ -196,3 +196,11 @@ export function TrashIcon(props: IconProps) {
     </IconBase>
   )
 }
+
+export function MenuIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  )
+}

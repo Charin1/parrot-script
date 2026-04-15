@@ -9,7 +9,7 @@ import { SummaryPanel } from './components/SummaryPanel'
 import { ThemeSelector } from './components/ThemeSelector'
 import { useMeetings } from './hooks/useMeetings'
 import { useLowBandwidth } from './hooks/useLowBandwidth'
-import { PlusIcon } from './components/icons'
+import { PlusIcon, MenuIcon } from './components/icons'
 import { useAuth } from './hooks/useAuth'
 import { useTheme } from './hooks/useTheme'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -21,7 +21,9 @@ function App() {
   const [appError, setAppError] = useState<string | null>(null)
   const [appNotice, setAppNotice] = useState<string | null>(null)
   const [newTitle, setNewTitle] = useState('Weekly Sync')
-  const [viewMode, setViewMode] = useState<'workspace' | 'dashboard'>('workspace')
+  const [viewMode, setViewMode] = useState<'workspace' | 'dashboard' | 'config'>('workspace')
+  const [dashboardTab, setDashboardTab] = useState<'search' | 'list'>('list')
+  const [sidebarOpen, setSidebarOpen] = useState(true)
   const [videoExpanded, setVideoExpanded] = useState(false)
   const [playbackTime, setPlaybackTime] = useState(0)
   const [playbackPlaying, setPlaybackPlaying] = useState(false)
@@ -323,59 +325,74 @@ function App() {
   }, [])
 
   return (
-    <div className="app-shell">
-      <aside className="left-panel">
-        <header className="brand-panel">
-          <div className="brand-top-row">
-            <img className="brand-logo" src="/parrot-script-logo.svg" alt="Parrot Script logo" />
-            <div className="brand-copy">
-              <span className="brand-kicker">Local-first meeting intelligence</span>
-              <h1>Parrot Script</h1>
-            </div>
-          </div>
-          <p>
-            Capture system audio, transcribe on-device, label speakers, and generate summaries
-            without exposing the runtime to your LAN by default.
-          </p>
-          <p className="mode-caption">
-            Active theme: <strong>{resolved}</strong> ({mode === 'system' ? 'auto' : mode})
-          </p>
-          <ThemeSelector mode={mode} onChange={setMode} />
-        </header>
-
-        <div className="panel security-panel">
-          <div className="panel-header">
-            <h3>Local API Security</h3>
-            <span className={`badge ${authBadgeClass}`}>
-              {authBadgeLabel}
-            </span>
-          </div>
-          <p className="muted">
-            {authDescription}
-          </p>
-          <div className="security-form">
-            <input
-              type="password"
-              value={apiTokenInput}
-              onChange={(event) => setApiTokenInput(event.target.value)}
-              placeholder="Enter API token"
-            />
-            <button type="button" onClick={() => void handleSaveToken()} disabled={busy}>
-              Save Token
-            </button>
-            <button type="button" className="secondary" onClick={handleRemoveToken} disabled={busy}>
-              Clear
-            </button>
+    <div className="app-wrapper">
+      <header className="global-top-bar">
+        <div className={`sidebar-header-proxy ${sidebarOpen ? '' : 'collapsed'}`}>
+          <button type="button" className="icon-btn header-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>
+            <MenuIcon width={24} height={24} />
+          </button>
+        </div>
+        <div className="brand-top-row">
+          <img className="brand-logo" src="/parrot-script-logo.svg" alt="Parrot Script logo" />
+          <div className="brand-copy">
+            <h1>Parrot Script</h1>
+            <span className="brand-kicker">Local-first meeting intelligence</span>
           </div>
         </div>
+      </header>
 
-        <RuntimeStatusPanel
-          browserOnline={browserOnline}
-          backendReachability={backendReachability}
-          streamState={connectionState}
-          lowBandwidth={lowBandwidth}
-          onToggleLowBandwidth={toggleLowBandwidth}
-        />
+      <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
+        {sidebarOpen && (
+          <aside className="left-panel">
+            <div className="panel nav-panel">
+            <button
+              type="button"
+              className={`nav-btn ${viewMode === 'workspace' ? '' : 'secondary'}`}
+              onClick={() => setViewMode('workspace')}
+            >
+              Current Meeting
+            </button>
+            <button
+              type="button"
+              className={`nav-btn ${viewMode === 'dashboard' ? '' : 'secondary'}`}
+              onClick={() => setViewMode('dashboard')}
+            >
+              Past Dashboard
+            </button>
+            <button
+              type="button"
+              className={`nav-btn ${viewMode === 'config' ? '' : 'secondary'}`}
+              onClick={() => setViewMode('config')}
+            >
+              Configuration
+            </button>
+          </div>
+
+          <div className="panel create-panel">
+            <h3>New Meeting</h3>
+            <div className="search-row">
+              <input
+                value={newTitle}
+                onChange={(event) => setNewTitle(event.target.value)}
+                placeholder="Meeting title"
+                maxLength={200}
+              />
+              <button type="button" onClick={onCreateMeetingClick} disabled={busy || !authReady}>
+                <PlusIcon className="btn-icon" width={14} height={14} />
+                <span>Create</span>
+              </button>
+            </div>
+          </div>
+
+        </aside>
+      )}
+
+      <main className="right-panel">
+        <div className="top-bar">
+          <h2>
+            {viewMode === 'workspace' ? 'Live Workspace' : viewMode === 'dashboard' ? 'Past Dashboard' : 'Configuration'}
+          </h2>
+        </div>
 
         {appError ? (
           <div className="panel error-banner" role="alert">
@@ -389,68 +406,101 @@ function App() {
           </div>
         ) : null}
 
-        <div className="panel create-panel">
-          <h3>New Meeting</h3>
-          <div className="search-row">
-            <input
-              value={newTitle}
-              onChange={(event) => setNewTitle(event.target.value)}
-              placeholder="Meeting title"
-              maxLength={200}
+        {viewMode === 'config' && (
+          <div className="config-view">
+            <div className="panel appearance-panel">
+              <div className="panel-header">
+                <h3>Appearance</h3>
+              </div>
+              <p className="muted" style={{ marginBottom: '0.5rem' }}>
+                Active theme: <strong>{resolved}</strong> ({mode === 'system' ? 'auto' : mode})
+              </p>
+              <ThemeSelector mode={mode} onChange={setMode} />
+            </div>
+
+            <div className="panel security-panel">
+              <div className="panel-header">
+                <h3>Local API Security</h3>
+                <span className={`badge ${authBadgeClass}`}>
+                  {authBadgeLabel}
+                </span>
+              </div>
+              <p className="muted">
+                {authDescription}
+              </p>
+              <div className="security-form">
+                <input
+                  type="password"
+                  value={apiTokenInput}
+                  onChange={(event) => setApiTokenInput(event.target.value)}
+                  placeholder="Enter API token"
+                />
+                <button type="button" onClick={() => void handleSaveToken()} disabled={busy}>
+                  Save Token
+                </button>
+                <button type="button" className="secondary" onClick={handleRemoveToken} disabled={busy}>
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <RuntimeStatusPanel
+              browserOnline={browserOnline}
+              backendReachability={backendReachability}
+              streamState={connectionState}
+              lowBandwidth={lowBandwidth}
+              onToggleLowBandwidth={toggleLowBandwidth}
             />
-            <button type="button" onClick={onCreateMeetingClick} disabled={busy || !authReady}>
-              <PlusIcon className="btn-icon" width={14} height={14} />
-              <span>Create</span>
-            </button>
           </div>
-        </div>
+        )}
 
+        {viewMode === 'dashboard' && (
+          <>
+            <div className="panel nav-panel" style={{ flexDirection: 'row', gap: '0.8rem', padding: '0.5rem 1rem' }}>
+              <button
+                type="button"
+                className={`nav-btn ${dashboardTab === 'search' ? '' : 'secondary'}`}
+                onClick={() => setDashboardTab('search')}
+              >
+                Semantic Search
+              </button>
+              <button
+                type="button"
+                className={`nav-btn ${dashboardTab === 'list' ? '' : 'secondary'}`}
+                onClick={() => setDashboardTab('list')}
+              >
+                Past Meetings
+              </button>
+            </div>
 
+            {dashboardTab === 'search' ? (
+              <SearchBar
+                disabled={!authReady}
+                onSearch={(query, signal) => api.search(query, 10, signal)}
+                onSelectMeeting={(meetingId) => {
+                  setAppError(null)
+                  setSelectedMeetingId(meetingId)
+                  setViewMode('workspace')
+                }}
+              />
+            ) : (
+              <PastMeetingsDashboard
+                meetings={meetings}
+                onOpenMeeting={(meetingId) => {
+                  setSelectedMeetingId(meetingId)
+                  setViewMode('workspace')
+                }}
+                onDeleteMeeting={(id) => {
+                  const m = meetings.find((x) => x.id === id)
+                  void deleteMeeting(id, m?.title || 'this meeting')
+                }}
+                onFiltersChange={handleDashboardFiltersChange}
+              />
+            )}
+          </>
+        )}
 
-        <SearchBar
-          disabled={!authReady}
-          onSearch={(query, signal) => api.search(query, 10, signal)}
-          onSelectMeeting={(meetingId) => {
-            setAppError(null)
-            setSelectedMeetingId(meetingId)
-            setViewMode('workspace')
-          }}
-        />
-      </aside>
-
-      <main className="right-panel">
-        <div className="panel workspace-switch">
-          <button
-            type="button"
-            className={viewMode === 'workspace' ? '' : 'secondary'}
-            onClick={() => setViewMode('workspace')}
-          >
-            Live Workspace
-          </button>
-          <button
-            type="button"
-            className={viewMode === 'dashboard' ? '' : 'secondary'}
-            onClick={() => setViewMode('dashboard')}
-          >
-            Past Dashboard
-          </button>
-        </div>
-
-        {viewMode === 'dashboard' ? (
-          <PastMeetingsDashboard
-            meetings={meetings}
-            onOpenMeeting={(meetingId) => {
-              setSelectedMeetingId(meetingId)
-              setViewMode('workspace')
-            }}
-            onDeleteMeeting={(id) => {
-              const m = meetings.find((x) => x.id === id)
-              void deleteMeeting(id, m?.title || 'this meeting')
-            }}
-            onFiltersChange={handleDashboardFiltersChange}
-          />
-
-        ) : (
+        {viewMode === 'workspace' && (
           <>
             <MeetingControls
               meeting={selectedMeeting}
@@ -518,9 +568,11 @@ function App() {
             />
           </>
         )}
-      </main>
+        </main>
+      </div>
     </div>
   )
 }
+
 
 export default App
