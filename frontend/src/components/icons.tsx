@@ -155,7 +155,7 @@ export function DownloadIcon(props: IconProps) {
   )
 }
 
-export function BookmarkIcon(props: IconProps & { filled?: boolean }) {
+export function BookmarkIcon({ filled, ...props }: IconProps & { filled?: boolean }) {
   return (
     <IconBase {...props}>
       <path
@@ -163,7 +163,7 @@ export function BookmarkIcon(props: IconProps & { filled?: boolean }) {
         strokeLinejoin="round"
         stroke="currentColor"
         strokeWidth="1.8"
-        fill={props.filled ? "currentColor" : "none"}
+        fill={filled ? "currentColor" : "none"}
         d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z"
       />
     </IconBase>
@@ -204,3 +204,41 @@ export function MenuIcon(props: IconProps) {
     </IconBase>
   )
 }
+
+export function CheckCircleIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path
+        d="M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </IconBase>
+  )
+}
+
+export function ListIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path
+        d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </IconBase>
+  )
+}
+
+export function ClockIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+      <path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  )
+}
+

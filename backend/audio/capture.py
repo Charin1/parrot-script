@@ -116,31 +116,35 @@ class AudioCapture:
             raise AudioCaptureError("Failed to open ffmpeg stdout pipe for audio capture.")
 
         self._running = True
-        self._reader_thread_handle = threading.Thread(target=self._reader_thread, daemon=True)
+        # Pass the process handle into the thread so `stop()` can safely clear `self._process`
+        # without racing the reader loop.
+        self._reader_thread_handle = threading.Thread(target=self._reader_thread, args=(self._process,), daemon=True)
         self._reader_thread_handle.start()
 
         if self._process.stderr is not None:
-            self._stderr_thread_handle = threading.Thread(target=self._stderr_thread, daemon=True)
+            self._stderr_thread_handle = threading.Thread(target=self._stderr_thread, args=(self._process,), daemon=True)
             self._stderr_thread_handle.start()
 
     async def stop(self) -> None:
         """Terminate FFmpeg process and stop reader threads."""
         self._running = False
 
-        if self._process is not None:
+        proc = self._process
+        if proc is not None:
             try:
-                self._process.terminate()
-                self._process.wait(timeout=2)
+                proc.terminate()
+                proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                self._process.kill()
-            finally:
-                self._process = None
+                proc.kill()
 
         if self._reader_thread_handle is not None and self._reader_thread_handle.is_alive():
             self._reader_thread_handle.join(timeout=1.0)
 
         if self._stderr_thread_handle is not None and self._stderr_thread_handle.is_alive():
             self._stderr_thread_handle.join(timeout=1.0)
+
+        # Clear after threads have had a chance to exit cleanly.
+        self._process = None
 
         if self._wav_file:
             try:
@@ -293,12 +297,13 @@ class AudioCapture:
 
         return f"Audio capture failed to start (ffmpeg exit={exit_code}). Details: {tail}"
 
-    def _stderr_thread(self) -> None:
-        assert self._process is not None
-        assert self._process.stderr is not None
+    def _stderr_thread(self, proc: subprocess.Popen) -> None:
+        stderr = proc.stderr
+        if stderr is None:
+            return
 
         while self._running:
-            line = self._process.stderr.readline()
+            line = stderr.readline()
             if not line:
                 break
             logger.debug("ffmpeg: %s", line.decode(errors="replace").strip())
@@ -307,19 +312,27 @@ class AudioCapture:
         if self._loop is None or not self._loop.is_running():
             return
         future = asyncio.run_coroutine_threadsafe(self.queue.put(event), self._loop)
-        future.result(timeout=2)
+        try:
+            future.result(timeout=2)
+        except Exception as exc:
+            # If the event loop is shutting down or overloaded, drop the chunk rather than
+            # crashing the reader thread (which would stop all future transcript updates).
+            logger.warning("Failed to enqueue audio chunk: %r", exc)
 
-    def _reader_thread(self) -> None:
-        assert self._process is not None
-        assert self._process.stdout is not None
+    def _reader_thread(self, proc: subprocess.Popen) -> None:
+        stdout = proc.stdout
+        if stdout is None:
+            return
 
         try:
             while self._running:
-                data = self._process.stdout.read(4096)
+                data = stdout.read(4096)
                 if not data:
-                    if self._process.poll() is not None:
-                        if self._running:
-                            logger.error("FFmpeg process exited unexpectedly with code %s", self._process.poll())
+                    if not self._running:
+                        break
+                    exit_code = proc.poll()
+                    if exit_code is not None:
+                        logger.error("FFmpeg process exited unexpectedly with code %s", exit_code)
                         break
                     time.sleep(0.01)
                     continue
@@ -352,3 +365,6 @@ class AudioCapture:
                     self._enqueue_event(event)
         except Exception as exc:  # pragma: no cover - hard to unit test thread failures
             logger.exception("Audio reader thread failed: %s", exc)
+            self._running = False
+            with contextlib.suppress(Exception):
+                proc.terminate()

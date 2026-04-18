@@ -83,7 +83,10 @@ export interface Segment {
 export interface Summary {
   id: string
   meeting_id: string
-  content: string
+  content: string // raw LLM response
+  summary?: string
+  action_items?: string // JSON string array
+  decisions?: string // JSON string array
   created_at: string
   model_used: string | null
 }
@@ -99,4 +102,10 @@ export interface SearchResult {
   meeting_id: string
   text: string
   score: number
+}
+
+export interface SummaryProgress {
+  meeting_id: string
+  current: number
+  total: number
 }

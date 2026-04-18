@@ -5,7 +5,10 @@ import json
 import os
 import subprocess
 import sys
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 from typing import Literal
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -111,6 +114,56 @@ class MeetingLinkLauncher:
         return "xdg-open"
 
 
+class AutomatedMeetingLinkLauncher(MeetingLinkLauncher):
+    def __init__(self, venv_python: str = "./.venv/bin/python"):
+        self.venv_python = venv_python
+        self.bot_script = os.path.join(os.path.dirname(__file__), "automation", "assistant_bot.py")
+
+    def launch(
+        self,
+        meeting_url: str,
+        source_platform: "SourcePlatform" = "other",
+        assistant_visible_name: str = "Parrot Script Assistant",
+    ) -> str:
+        if source_platform == "google_meet" and os.path.exists(self.bot_script):
+            profile_dir = os.path.join(os.path.dirname(self.bot_script), ".bot_profile")
+            if not os.path.exists(profile_dir):
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning("Bot profile missing. Please run backend/automation/setup_bot_profile.py. Falling back to OS browser.")
+            else:
+                try:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    # Launch the bot script in the background using the venv
+                    cmd = [
+                        self.venv_python,
+                        self.bot_script,
+                        "--url", meeting_url,
+                        "--name", assistant_visible_name,
+                        "--headed" # Running headed by default as Meet blocks headless easier
+                    ]
+                    bot_log = os.path.join(os.path.dirname(self.bot_script), "bot.log")
+                    logger.info("Launching automated assistant bot: %s (Logging to %s)", " ".join(cmd), bot_log)
+                    
+                    import subprocess
+                    with open(bot_log, "a") as log_file:
+                        subprocess.Popen(
+                            cmd, 
+                            stdout=log_file, 
+                            stderr=subprocess.STDOUT,
+                            start_new_session=True
+                        )
+                    return "playwright_automated_join"
+                except Exception as exc:
+                    logger.warning("Automated join failed, falling back to browser open: %s", exc)
+        
+        return super().launch(meeting_url, source_platform, assistant_visible_name)
+
+    def describe(self) -> str:
+        return "playwright_automation"
+
+
 class StubMeetingAssistantProvider:
     async def request_join(self, request: AssistantJoinRequest) -> AssistantSession:
         return AssistantSession(
@@ -131,7 +184,7 @@ class StubMeetingAssistantProvider:
 
 class LocalMeetingAssistantProvider:
     def __init__(self, launcher: MeetingLinkLauncher | None = None):
-        self.launcher = launcher or MeetingLinkLauncher()
+        self.launcher = launcher or AutomatedMeetingLinkLauncher()
 
     async def request_join(self, request: AssistantJoinRequest) -> AssistantSession:
         try:

@@ -115,7 +115,7 @@ async def get_db() -> AsyncIterator[aiosqlite.Connection]:
     db_path = Path(settings.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    db = await aiosqlite.connect(db_path.as_posix())
+    db = await aiosqlite.connect(db_path.as_posix(), timeout=10.0)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
@@ -162,5 +162,17 @@ async def init_db() -> None:
             columns = [dict(row)["name"] for row in await cur.fetchall()]
             if "is_bookmarked" not in columns:
                 await db.execute("ALTER TABLE transcript_segments ADD COLUMN is_bookmarked BOOLEAN DEFAULT 0")
+
+        # Safe migration for new summary intelligence columns
+        async with db.execute("PRAGMA table_info(summaries)") as cur:
+            sum_columns = [dict(row)["name"] for row in await cur.fetchall()]
+            summary_fields = {
+                "summary": "ALTER TABLE summaries ADD COLUMN summary TEXT",
+                "action_items": "ALTER TABLE summaries ADD COLUMN action_items TEXT",
+                "decisions": "ALTER TABLE summaries ADD COLUMN decisions TEXT",
+            }
+            for column, sql in summary_fields.items():
+                if column not in sum_columns:
+                    await db.execute(sql)
 
         await db.commit()

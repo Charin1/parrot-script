@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { getApiToken, getBackendOrigin } from '../api/client'
-import type { MeetingStatus, Segment } from '../types/models'
+import type { MeetingStatus, Segment, Summary, SummaryProgress } from '../types/models'
 
 const MAX_SEGMENTS = 2000
 const UNAUTHORIZED_CLOSE_CODE = 4401
@@ -34,10 +34,27 @@ function appendSegment(prev: Segment[], incoming: Segment): Segment[] {
   return next.slice(next.length - MAX_SEGMENTS)
 }
 
-export function useWebSocket(meetingId: string | null, apiToken: string) {
-  const [segments, setSegments] = useState<Segment[]>([])
-  const [status, setStatus] = useState<MeetingStatus | undefined>(undefined)
-  const [connectionState, setConnectionState] = useState<StreamConnectionState>('idle')
+export function useWebSocket(
+  meetingId: string | null, 
+  apiToken: string,
+  setSegments: (val: Segment[] | ((prev: Segment[]) => Segment[])) => void,
+  setStatus: (val: MeetingStatus | undefined) => void,
+  setSummaryProgress: (val: SummaryProgress | null) => void,
+  setConnectionState: (val: StreamConnectionState) => void,
+  onSummaryCompleted?: (summary: Summary) => void,
+  onSummaryFailed?: (payload: { meeting_id?: string; error?: string }) => void
+) {
+  const onSummaryCompletedRef = useRef<typeof onSummaryCompleted>(undefined)
+  const onSummaryFailedRef = useRef<typeof onSummaryFailed>(undefined)
+  const transcriptMessageCountRef = useRef(0)
+
+  useEffect(() => {
+    onSummaryCompletedRef.current = onSummaryCompleted
+  }, [onSummaryCompleted])
+
+  useEffect(() => {
+    onSummaryFailedRef.current = onSummaryFailed
+  }, [onSummaryFailed])
 
   const wsUrl = useMemo(() => {
     if (!meetingId) {
@@ -58,13 +75,17 @@ export function useWebSocket(meetingId: string | null, apiToken: string) {
     if (!wsUrl) {
       setSegments([])
       setStatus(undefined)
+      setSummaryProgress(null)
       setConnectionState('idle')
+      transcriptMessageCountRef.current = 0
       return
     }
 
     // Reset state when switching to a new meeting URL
     setSegments([])
     setStatus(undefined)
+    setSummaryProgress(null)
+    transcriptMessageCountRef.current = 0
 
     let cancelled = false
     let activeSocket: WebSocket | null = null
@@ -127,8 +148,37 @@ export function useWebSocket(meetingId: string | null, apiToken: string) {
           const msg = JSON.parse(event.data) as { type?: string; data?: unknown }
           if (msg.type === 'transcript' && msg.data) {
             setSegments((prev) => appendSegment(prev, msg.data as Segment))
+            transcriptMessageCountRef.current += 1
+            const n = transcriptMessageCountRef.current
+            if (n === 1 || n % 50 === 0) {
+              const seg = msg.data as any
+              const start = typeof seg?.start_time === 'number' ? seg.start_time.toFixed(1) : '?'
+              const end = typeof seg?.end_time === 'number' ? seg.end_time.toFixed(1) : '?'
+              console.info(`[ws] transcript meeting=${meetingId ?? ''} segments=${n} t=${start}-${end}`)
+            }
           } else if (msg.type === 'status' && msg.data) {
             setStatus(msg.data as MeetingStatus)
+          } else if (msg.type === 'summary_progress' && msg.data) {
+            const progress = msg.data as SummaryProgress
+            setSummaryProgress(progress)
+            console.info(`[ws] summary_progress meeting=${progress.meeting_id} ${progress.current}/${progress.total}`)
+          } else if (msg.type === 'summary_completed' && msg.data) {
+            setSummaryProgress(null)
+            if (onSummaryCompletedRef.current) {
+              const completed = msg.data as any
+              const meeting = typeof completed?.meeting_id === 'string' ? completed.meeting_id : meetingId ?? ''
+              console.info(`[ws] summary_completed meeting=${meeting}`)
+              onSummaryCompletedRef.current(msg.data as Summary)
+            }
+          } else if (msg.type === 'summary_failed') {
+            setSummaryProgress(null)
+            if (onSummaryFailedRef.current) {
+              const payload = (msg.data ?? {}) as any
+              const meeting = typeof payload?.meeting_id === 'string' ? payload.meeting_id : meetingId ?? ''
+              const err = typeof payload?.error === 'string' ? payload.error : ''
+              console.warn(`[ws] summary_failed meeting=${meeting}`, err)
+              onSummaryFailedRef.current((msg.data ?? {}) as { meeting_id?: string; error?: string })
+            }
           }
         } catch {
           // Drop malformed messages.
@@ -201,6 +251,4 @@ export function useWebSocket(meetingId: string | null, apiToken: string) {
       setConnectionState('disconnected')
     }
   }, [wsUrl])
-
-  return { segments, status, setSegments, connectionState }
 }

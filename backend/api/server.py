@@ -7,7 +7,10 @@ from typing import Any
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
+from backend.api.limiter import limiter
 from backend.api.auth import auth_enabled, verify_http_request, verify_websocket_request
 from backend.api.routes.meetings import router as meetings_router
 from backend.api.routes.native import router as native_router
@@ -42,6 +45,9 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Parrot Script", version="1.0.0", lifespan=lifespan)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,

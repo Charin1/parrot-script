@@ -16,6 +16,11 @@ const DEFAULT_BACKEND_PORT = '8000'
 const DEFAULT_BACKEND_PROTOCOL = 'http:'
 const TRANSCRIPT_PAGE_SIZE = 500
 
+function shouldLogRequest(url: string | undefined): boolean {
+  if (!url) return false
+  return url.includes('/summary') || url.includes('/summarize')
+}
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '')
 }
@@ -52,7 +57,7 @@ export function buildBackendUrl(path: string): string {
 
 const client = axios.create({
   baseURL: buildBackendUrl('/api'),
-  timeout: 30000,
+  timeout: 300000, // Increase to 5 minutes for local AI generation
   headers: {
     'X-Requested-With': 'ParrotScriptClient',
   },
@@ -76,6 +81,8 @@ export function clearApiToken(): void {
 }
 
 client.interceptors.request.use((config) => {
+  ;(config as any).metadata = { startMs: Date.now() }
+
   const token = getApiToken()
   if (token) {
     config.headers = config.headers ?? {}
@@ -83,6 +90,45 @@ client.interceptors.request.use((config) => {
   }
   return config
 })
+
+client.interceptors.response.use(
+  (response) => {
+    try {
+      const meta = (response.config as any)?.metadata as { startMs?: number } | undefined
+      const durationMs = meta?.startMs ? Date.now() - meta.startMs : undefined
+      if (shouldLogRequest(response.config?.url)) {
+        const method = response.config?.method?.toUpperCase() ?? 'GET'
+        const url = response.config?.url ?? ''
+        const timing = durationMs !== undefined ? ` ${durationMs}ms` : ''
+        console.info(`[api] ${method} ${url} -> ${response.status}${timing}`)
+      }
+    } catch {
+      // Logging must never break requests.
+    }
+    return response
+  },
+  (error: AxiosError) => {
+    try {
+      const config: any = error.config ?? {}
+      const meta = config?.metadata as { startMs?: number } | undefined
+      const durationMs = meta?.startMs ? Date.now() - meta.startMs : undefined
+      const url: string | undefined = config?.url
+      if (shouldLogRequest(url)) {
+        const method = config?.method?.toUpperCase() ?? 'GET'
+        const status = error.response?.status
+        const timing = durationMs !== undefined ? ` ${durationMs}ms` : ''
+        const statusLabel = typeof status === 'number' ? status : 'ERR'
+        console.warn(`[api] ${method} ${url ?? ''} -> ${statusLabel}${timing}`, {
+          code: error.code,
+          message: error.message,
+        })
+      }
+    } catch {
+      // Logging must never break requests.
+    }
+    return Promise.reject(error)
+  }
+)
 
 // Custom Axios Exponential Backoff Retry Interceptor
 client.interceptors.response.use(undefined, async (error: AxiosError) => {
@@ -117,6 +163,13 @@ client.interceptors.response.use(undefined, async (error: AxiosError) => {
 
 export function formatApiError(error: unknown): string {
   if (axios.isAxiosError(error)) {
+    console.error('API Error details:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      code: error.code,
+      message: error.message,
+    })
+
     if (error.response?.status === 401) {
       return 'Unauthorized. Set the API token in the UI.'
     }
@@ -126,14 +179,37 @@ export function formatApiError(error: unknown): string {
     if (!error.response && error.code === 'ERR_NETWORK') {
       return `Cannot reach the local backend at ${getBackendOrigin()}.`
     }
-    const detail = (error.response?.data as { detail?: string } | undefined)?.detail
+
+    const responseData = error.response?.data as any
+    const detail = responseData?.detail
     if (typeof detail === 'string' && detail.trim()) {
       return detail
+    }
+    const message = responseData?.message
+    if (typeof message === 'string' && message.trim()) {
+      return message
+    }
+    if (typeof responseData === 'string' && responseData.trim()) {
+      return responseData
     }
     if (error.message) {
       return error.message
     }
   }
+
+  if (error instanceof Error && error.message.trim()) {
+    return error.message
+  }
+  if (typeof error === 'string' && error.trim()) {
+    return error
+  }
+
+  console.error('[Diagnostic] Request error detail:', {
+    isAxiosError: axios.isAxiosError(error),
+    errorObj: error,
+    stack: error instanceof Error ? error.stack : 'No stack',
+  })
+
   return 'Unexpected request error'
 }
 

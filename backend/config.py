@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # Ollama
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "mistral:7b-instruct"
-    ollama_timeout: int = 120
+    ollama_timeout: int = 300
 
     # Database
     db_path: str = "./data/meetings.db"

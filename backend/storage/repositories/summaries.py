@@ -6,15 +6,15 @@ from backend.storage.db import get_db
 
 
 class SummariesRepository:
-    async def insert(self, meeting_id: str, content: str, model: str) -> dict:
+    async def insert(self, meeting_id: str, content: str, model: str, summary: str = None, action_items: str = None, decisions: str = None) -> dict:
         summary_id = str(uuid4())
         async with get_db() as db:
             await db.execute(
                 """
-                INSERT INTO summaries(id, meeting_id, content, model_used)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO summaries(id, meeting_id, content, model_used, summary, action_items, decisions)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (summary_id, meeting_id, content, model),
+                (summary_id, meeting_id, content, model, summary, action_items, decisions),
             )
             await db.commit()
         return await self._get(summary_id)
@@ -28,11 +28,11 @@ class SummariesRepository:
                 row = await cur.fetchone()
                 return dict(row) if row else None
 
-    async def update(self, summary_id: str, content: str, model_used: str) -> dict:
+    async def update(self, summary_id: str, content: str, model_used: str, summary: str = None, action_items: str = None, decisions: str = None) -> dict:
         async with get_db() as db:
             await db.execute(
-                "UPDATE summaries SET content = ?, model_used = ? WHERE id = ?",
-                (content, model_used, summary_id),
+                "UPDATE summaries SET content = ?, model_used = ?, summary = ?, action_items = ?, decisions = ? WHERE id = ?",
+                (content, model_used, summary, action_items, decisions, summary_id),
             )
             await db.commit()
         return await self._get(summary_id)

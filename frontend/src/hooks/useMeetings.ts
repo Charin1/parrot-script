@@ -8,7 +8,8 @@ export function useMeetings(
   setAppError: (err: string | null) => void,
   setAppNotice: (notice: string | null) => void,
   setBusy: (busy: boolean) => void,
-  setSegments: (segments: Segment[]) => void
+  setSegments: (segments: Segment[]) => void,
+  setSummaryProcessing: (processing: boolean) => void
 ) {
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null)
@@ -18,8 +19,9 @@ export function useMeetings(
     setMeetings([])
     setSelectedMeetingId(null)
     setSummary(null)
+    setSummaryProcessing(false)
     setSegments([])
-  }, [setSegments])
+  }, [setSegments, setSummaryProcessing])
 
   const refreshMeetings = useCallback(async (signal?: AbortSignal, filters?: {
     q?: string
@@ -44,6 +46,7 @@ export function useMeetings(
     try {
       await action()
     } catch (error) {
+      console.error('Action failed:', error)
       setAppError(formatApiError(error))
     } finally {
       setBusy(false)
@@ -81,10 +84,22 @@ export function useMeetings(
 
   const generateSummary = async (promptTemplate?: string) => {
     if (!selectedMeetingId) return
-    await runBusy(async () => {
+    setSummaryProcessing(true)
+    setAppError(null)
+    setAppNotice(null)
+    setSummary(null)
+    try {
       const data = await api.generateSummary(selectedMeetingId, promptTemplate)
+      if ((data as any).status === 'processing') {
+        return
+      }
       setSummary(data)
-    })
+      setSummaryProcessing(false)
+    } catch (error) {
+      console.error('Action failed:', error)
+      setAppError(formatApiError(error))
+      setSummaryProcessing(false)
+    }
   }
 
   const deleteMeeting = async (id: string, meetingTitle: string) => {

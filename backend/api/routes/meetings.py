@@ -12,6 +12,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
+from backend.api.limiter import limiter
+
 from pydantic import BaseModel, Field, field_validator
 import aiofiles
 from pathlib import Path
@@ -417,7 +419,8 @@ async def delete_meeting(meeting_id: UUID) -> dict[str, bool]:
 
 
 @router.post('/{meeting_id}/start')
-async def start_recording(meeting_id: UUID, body: Optional[StartMeetingRequest] = None) -> dict[str, Any]:
+@limiter.limit("10/minute")
+async def start_recording(request: Request, meeting_id: UUID, body: Optional[StartMeetingRequest] = None) -> dict[str, Any]:
     meeting_id_str = str(meeting_id)
     meeting = await meetings_repo.get(meeting_id_str)
     if meeting is None:
@@ -437,6 +440,10 @@ async def start_recording(meeting_id: UUID, body: Optional[StartMeetingRequest] 
     )
     meeting_url = body.meeting_url if body.meeting_url is not None else meeting.get('meeting_url')
     source_platform = body.source_platform or infer_source_platform(meeting_url)
+    
+    # Determine recording type and resolution
+    recording_type = body.recording_type or 'audio'
+    video_resolution = body.video_resolution or settings.video_default_resolution
 
     if capture_mode == 'assistant':
         if not meeting_url:
@@ -473,7 +480,16 @@ async def start_recording(meeting_id: UUID, body: Optional[StartMeetingRequest] 
                 detail=session.message or 'Assistant mode could not open the meeting link.',
             )
 
-        pipeline = MeetingPipeline(meeting_id_str, capture_source=LocalAudioSource(meeting_id_str))
+        if recording_type == 'video_audio':
+            capture_src = LocalVideoAudioSource(
+                meeting_id_str,
+                resolution=video_resolution,
+                ghost_mode=False,
+            )
+        else:
+            capture_src = LocalAudioSource(meeting_id_str)
+
+        pipeline = MeetingPipeline(meeting_id_str, capture_source=capture_src)
         async with _pipeline_lock:
             active_pipelines[meeting_id_str] = pipeline
         start_task = asyncio.create_task(_start_pipeline(meeting_id_str, pipeline))
@@ -492,6 +508,8 @@ async def start_recording(meeting_id: UUID, body: Optional[StartMeetingRequest] 
             provider_session_id=session.provider_session_id,
             provider_metadata=serialize_provider_metadata(session.provider_metadata),
             status='recording',
+            recording_type=recording_type,
+            video_resolution=video_resolution if recording_type == 'video_audio' else None,
         )
         return {
             'status': 'recording',

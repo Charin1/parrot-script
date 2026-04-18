@@ -106,7 +106,11 @@ class SegmentsRepository:
             await db.commit()
         return await self._get(segment_id)
 
-    async def build_transcript_text(self, meeting_id: str) -> str:
+    async def toggle_bookmark(self, segment_id: str, is_bookmarked: bool) -> dict | None:
+        # Backwards-compatible alias used by the API route.
+        return await self.update_bookmark(segment_id, is_bookmarked)
+
+    async def get_full_text(self, meeting_id: str) -> str:
         segments = await self.get_by_meeting(meeting_id, limit=100000)
         lines = []
         for seg in segments:

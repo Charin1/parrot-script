@@ -1,27 +1,19 @@
 MEETING_SUMMARY_PROMPT = """
 You are an expert meeting analyst.
 
-Analyze the following transcript and return ONLY valid markdown with these exact sections:
+Analyze the following transcript and return ONLY valid JSON formatted strictly like this, and absolutely nothing else:
 
-## Summary
-(2-3 sentence high-level overview)
-
-## Key Discussion Points
-- point 1
-
-## Decisions Made
-- decision 1 (or "None identified")
-
-## Action Items
-| Assignee | Task | Notes |
-|----------|------|-------|
-| Name | Description | context |
-
-## Risks & Blockers
-- risk 1 (or "None identified")
-
-## Next Steps
-- step 1
+{
+  "summary": "2-3 sentence high-level overview of the meeting.",
+  "action_items": [
+    "Alice will schedule a follow-up meeting with Bob.",
+    "Charlie to draft the XYZ report by Friday."
+  ],
+  "decisions": [
+    "We will migrate to PostgreSQL next month.",
+    "Budget approved for the Q4 marketing campaign."
+  ]
+}
 
 TRANSCRIPT:
 {transcript}
@@ -41,11 +33,17 @@ You are combining multiple partial meeting summaries into a final structured sum
 PARTIAL SUMMARIES:
 {summaries}
 
-Return ONLY valid markdown with these sections:
-## Summary
-## Key Discussion Points
-## Decisions Made
-## Action Items (table format)
-## Risks & Blockers
-## Next Steps
+Return ONLY valid JSON formatted strictly like this, and absolutely nothing else:
+
+{
+  "summary": "2-3 sentence high-level overview of the entire meeting.",
+  "action_items": [
+    "Alice will schedule a follow-up meeting with Bob.",
+    "Charlie to draft the XYZ report by Friday."
+  ],
+  "decisions": [
+    "We will migrate to PostgreSQL next month.",
+    "Budget approved for the Q4 marketing campaign."
+  ]
+}
 """
