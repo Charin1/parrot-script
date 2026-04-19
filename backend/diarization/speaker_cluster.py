@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 class SpeakerClusterer:
     def __init__(self, embedder: VoiceEmbedder | None = None):
         self.embedder = embedder or VoiceEmbedder()
-        self.embedding_history: deque[tuple[str, np.ndarray]] = deque(
-            maxlen=settings.embedding_window_size
-        )
+        # Keep embeddings per-speaker (instead of a single global sliding window).
+        # A global window tends to "forget" quiet speakers and makes centroids drift toward
+        # whoever talks the most, which eventually collapses attribution.
+        self.embedding_history_by_label: dict[str, deque[np.ndarray]] = {}
         self.labels: list[str] = []
         self.speaker_count: int = 0
         self.label_assignment_counts: dict[str, int] = {}
@@ -43,11 +44,17 @@ class SpeakerClusterer:
                     fallback = self.labels[-1]
                 if fallback is None:
                     fallback = self._new_label()
-                self._remember_assignment(fallback, embedding, segment_start, segment_end)
+                self._remember_assignment(
+                    fallback,
+                    embedding,
+                    segment_start,
+                    segment_end,
+                    remember_embedding=False,
+                )
                 logger.info("Zero-vector speaker embedding, falling back to %s", fallback)
                 return fallback
 
-            if not self.embedding_history:
+            if not self._has_any_embedding_locked():
                 label = self._new_label()
                 self._remember_assignment(label, embedding, segment_start, segment_end)
                 logger.info("First speaker detected: %s", label)
@@ -86,6 +93,7 @@ class SpeakerClusterer:
 
             if confident_best and (clear_best or best_label == recent_label):
                 assigned = best_label
+                remember_embedding = True
             elif recent_is_plausible:
                 assigned = recent_label
                 logger.info(
@@ -93,24 +101,42 @@ class SpeakerClusterer:
                     recent_label,
                     recent_score,
                 )
+                # Avoid centroid drift: only update history if we're truly confident.
+                remember_embedding = recent_score >= settings.speaker_update_threshold
             elif len(unique) >= settings.max_speakers:
                 assigned = best_label
+                remember_embedding = best_score >= settings.speaker_update_threshold and clear_best
             else:
                 assigned = self._new_label()
+                remember_embedding = True
 
-            self._remember_assignment(assigned, embedding, segment_start, segment_end)
+            # Extra guardrail: even when we assign a label, only learn from it when the
+            # embedding is strongly consistent with that label's centroid.
+            # This is the main protection against "everyone becomes the dominant speaker".
+            if assigned in similarities:
+                assigned_score = similarities.get(assigned, -1.0)
+                if assigned_score < settings.speaker_update_threshold:
+                    remember_embedding = False
+
+            self._remember_assignment(
+                assigned,
+                embedding,
+                segment_start,
+                segment_end,
+                remember_embedding=remember_embedding,
+            )
             logger.debug("Assigned chunk to %s", assigned)
             return assigned
 
     def get_centroid(self, label: str) -> np.ndarray:
-        matches = [embedding for current_label, embedding in self.embedding_history if current_label == label]
+        matches = self.embedding_history_by_label.get(label)
         if not matches:
             return np.zeros(256, dtype=np.float32)
-        return np.mean(np.stack(matches), axis=0)
+        return np.mean(np.stack(list(matches)), axis=0)
 
     def reset(self, initial_speaker_count: int = 0) -> None:
         with self._lock:
-            self.embedding_history.clear()
+            self.embedding_history_by_label.clear()
             self.labels.clear()
             self.speaker_count = initial_speaker_count
             self.label_assignment_counts.clear()
@@ -190,9 +216,15 @@ class SpeakerClusterer:
         embedding: np.ndarray,
         segment_start: float | None,
         segment_end: float | None,
+        *,
+        remember_embedding: bool = True,
     ) -> None:
-        if float(np.linalg.norm(embedding)) > 0.0:
-            self.embedding_history.append((label, embedding))
+        if remember_embedding and float(np.linalg.norm(embedding)) > 0.0:
+            history = self.embedding_history_by_label.get(label)
+            if history is None:
+                history = deque(maxlen=settings.embedding_window_size)
+                self.embedding_history_by_label[label] = history
+            history.append(embedding)
         self.labels.append(label)
         self.label_assignment_counts[label] = self.label_assignment_counts.get(label, 0) + 1
         duration = 0.0
@@ -200,6 +232,9 @@ class SpeakerClusterer:
             duration = max(0.0, segment_end - segment_start)
         self.label_total_durations[label] = self.label_total_durations.get(label, 0.0) + duration
         self._last_assignment = (label, segment_end)
+
+    def _has_any_embedding_locked(self) -> bool:
+        return any(len(history) > 0 for history in self.embedding_history_by_label.values())
 
     def _stable_labels_locked(self) -> list[str]:
         return sorted(

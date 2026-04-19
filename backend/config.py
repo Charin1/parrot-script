@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     speaker_segment_padding_seconds: float = 0.35
     speaker_min_segment_seconds: float = 1.2
     speaker_similarity_margin: float = 0.08
+    # Only update a speaker's centroid/history when the match is very confident.
+    # This reduces "centroid drift" where the most talkative speaker gradually absorbs others.
+    speaker_update_threshold: float = 0.90
     speaker_temporal_hold_seconds: float = 1.25
     speaker_min_stable_segments: int = 2
     speaker_min_stable_seconds: float = 2.0
