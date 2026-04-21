@@ -232,6 +232,19 @@ export const api = {
     return data
   },
 
+  async importMeeting(title: string, file: File): Promise<Meeting> {
+    const cleanTitle = title.trim().slice(0, 200)
+    const form = new FormData()
+    form.append('title', cleanTitle)
+    form.append('file', file)
+    const { data } = await client.post<Meeting>('/meetings/import', form, {
+      // Large uploads can exceed the default request timeout.
+      timeout: 0,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return data
+  },
+
   async listMeetings(signal?: AbortSignal, filters?: {
     q?: string
     status?: string

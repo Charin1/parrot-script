@@ -9,7 +9,7 @@ import time
 from typing import Any, Literal, Optional, AsyncGenerator
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 
 from backend.api.limiter import limiter
@@ -29,7 +29,7 @@ from backend.assistants import (
     resolve_capture_mode,
     serialize_provider_metadata,
 )
-from backend.audio.sources import LocalAudioSource, LocalVideoAudioSource
+from backend.audio.sources import LocalAudioSource, LocalVideoAudioSource, ImportedFileAudioSource
 from backend.config import settings
 
 from backend.core.pipeline import MeetingPipeline
@@ -183,6 +183,120 @@ async def _start_pipeline(meeting_id: str, pipeline: MeetingPipeline) -> None:
         )
     finally:
         async with _pipeline_lock:
+            _pipeline_start_tasks.pop(meeting_id, None)
+
+
+async def _run_import_job(meeting_id: str, source_path: Path) -> None:
+    """Convert uploaded media to WAV, then run transcription in the background."""
+    data_dir = Path(settings.db_path).parent
+    wav_path = data_dir / f"{meeting_id}.wav"
+    mp4_path = data_dir / f"{meeting_id}.mp4"
+
+    def _is_video(path: Path) -> bool:
+        return path.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
+
+    async def _run_cmd(cmd: list[str]) -> tuple[int, str]:
+        def _run() -> tuple[int, str]:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            out = (result.stderr or "")[-4000:]
+            return result.returncode, out
+        return await asyncio.to_thread(_run)
+
+    try:
+        meeting = await meetings_repo.get(meeting_id)
+        if meeting is None:
+            return
+
+        # Best-effort: store a playable MP4 if the upload was a video container.
+        has_video = False
+        if _is_video(source_path):
+            cmd = ["ffmpeg", "-y", "-i", str(source_path), "-movflags", "faststart", "-c", "copy", str(mp4_path)]
+            code, err = await _run_cmd(cmd)
+            if code != 0:
+                logger.warning("Video remux failed for %s (will continue without video): %s", meeting_id, err)
+            else:
+                has_video = mp4_path.exists() and mp4_path.stat().st_size > 0
+
+        # Extract WAV for transcription (16kHz mono PCM).
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source_path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(settings.audio_sample_rate),
+            "-c:a",
+            "pcm_s16le",
+            str(wav_path),
+        ]
+        code, err = await _run_cmd(cmd)
+        if code != 0 or not wav_path.exists():
+            raise RuntimeError(f"ffmpeg audio extract failed: {err}")
+
+        # Read WAV duration for final meeting duration.
+        import wave
+
+        def _duration() -> float:
+            with wave.open(str(wav_path), "rb") as wf:
+                frames = wf.getnframes()
+                rate = wf.getframerate() or settings.audio_sample_rate
+                return frames / float(rate) if rate > 0 else 0.0
+
+        duration_s = await asyncio.to_thread(_duration)
+
+        await meetings_repo.update(
+            meeting_id,
+            status="recording",
+            capture_mode="private",
+            ghost_mode=True,
+            source_platform="local",
+            meeting_url=None,
+            assistant_join_status="not_requested",
+            consent_status="not_needed",
+            recording_type="video_audio" if has_video else "audio",
+            has_video=has_video,
+            metadata="Imported file transcription in progress.",
+            duration_s=duration_s,
+        )
+
+        capture_src = ImportedFileAudioSource(wav_path)
+        pipeline = MeetingPipeline(meeting_id, capture_source=capture_src)
+        async with _pipeline_lock:
+            active_pipelines[meeting_id] = pipeline
+
+        start_task = asyncio.create_task(_start_import_pipeline(meeting_id, pipeline, duration_s))
+        async with _pipeline_lock:
+            _pipeline_start_tasks[meeting_id] = start_task
+    except Exception as exc:
+        logger.exception("Import job failed for %s: %s", meeting_id, exc)
+        with contextlib.suppress(Exception):
+            await meetings_repo.update(meeting_id, status="failed", metadata=f"Import failed: {exc}")
+
+
+async def _start_import_pipeline(meeting_id: str, pipeline: MeetingPipeline, duration_s: float) -> None:
+    """Start the pipeline and automatically mark the meeting completed when done."""
+    try:
+        await pipeline.start()
+        await pipeline.wait()
+        current = await meetings_repo.get(meeting_id)
+        if current is None:
+            return
+        if current.get("status") != "completed":
+            await meetings_repo.end_meeting(meeting_id, duration_s)
+    except asyncio.CancelledError:
+        if pipeline.running:
+            await pipeline.stop()
+        raise
+    except Exception as exc:
+        logger.exception("Import pipeline failed for %s: %s", meeting_id, exc)
+        with contextlib.suppress(Exception):
+            await meetings_repo.update(meeting_id, status="failed", metadata=f"Import pipeline failed: {exc}")
+    finally:
+        async with _pipeline_lock:
+            active_pipelines.pop(meeting_id, None)
             _pipeline_start_tasks.pop(meeting_id, None)
 
 
@@ -346,6 +460,52 @@ def _ensure_video_has_audio(video_path: Path, audio_path: Path) -> bool:
 @router.post('/')
 async def create_meeting(body: CreateMeetingRequest) -> dict[str, Any]:
     return await meetings_repo.create(body.title)
+
+
+@router.post('/import')
+@limiter.limit("3/minute")
+async def import_meeting(
+    request: Request,
+    title: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    clean_title = (title or "").strip()[:200]
+    if not clean_title:
+        raise HTTPException(status_code=422, detail="Meeting title cannot be empty")
+
+    meeting = await meetings_repo.create(clean_title)
+    meeting_id = meeting["id"]
+
+    data_dir = Path(settings.db_path).parent
+    suffix = Path(file.filename or "").suffix or ".bin"
+    source_path = data_dir / f"{meeting_id}_upload{suffix}"
+
+    try:
+        async with aiofiles.open(source_path, "wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                await out.write(chunk)
+    except Exception as exc:
+        logger.exception("Failed to save uploaded file for %s: %s", meeting_id, exc)
+        with contextlib.suppress(Exception):
+            await meetings_repo.update(meeting_id, status="failed", metadata=f"Upload save failed: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+    finally:
+        with contextlib.suppress(Exception):
+            await file.close()
+
+    await meetings_repo.update(
+        meeting_id,
+        status="recording",
+        metadata="Upload received. Import processing queued.",
+    )
+
+    # Run conversion + transcription in the background so the user can keep using the UI.
+    asyncio.create_task(_run_import_job(meeting_id, source_path))
+    updated = await meetings_repo.get(meeting_id)
+    return updated or meeting
 
 
 @router.get('/')

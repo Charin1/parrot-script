@@ -109,3 +109,9 @@ export interface SummaryProgress {
   current: number
   total: number
 }
+
+export interface TranscriptProgress {
+  meeting_id: string
+  current: number
+  total: number
+}

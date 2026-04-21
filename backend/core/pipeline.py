@@ -77,6 +77,13 @@ class MeetingPipeline:
             },
         )
 
+    async def wait(self) -> None:
+        """Wait until the internal processing loop completes."""
+        task = self._task
+        if task is None:
+            return
+        await task
+
     async def stop(self) -> None:
         self.running = False
         await self.capture_source.stop()
@@ -148,14 +155,30 @@ class MeetingPipeline:
         seq_counter = 0                  # monotonically increasing per chunk
         pending: dict[int, asyncio.Task] = {}  # seq -> processing task
         results_ready = asyncio.Event()  # signalled when any result lands
+        processed_chunks = 0
 
         async def _emit_ready():
             """Emit results in strict sequence order."""
-            nonlocal next_seq_to_emit
+            nonlocal next_seq_to_emit, processed_chunks
             while next_seq_to_emit in results:
                 seq = next_seq_to_emit
                 chunk, segments = results.pop(next_seq_to_emit)
                 next_seq_to_emit += 1
+
+                processed_chunks += 1
+
+                if getattr(chunk, "total_chunks", None) is not None:
+                    await manager.broadcast(
+                        self.meeting_id,
+                        {
+                            "type": "transcript_progress",
+                            "data": {
+                                "meeting_id": self.meeting_id,
+                                "current": int(getattr(chunk, "chunk_index", processed_chunks)) + 1,
+                                "total": int(getattr(chunk, "total_chunks")),
+                            },
+                        },
+                    )
 
                 if not segments:
                     continue
@@ -233,6 +256,10 @@ class MeetingPipeline:
                 # Even on timeout, try to emit any ready results
                 await _emit_ready()
                 continue
+            if chunk is None:
+                # End-of-stream sentinel (used by file imports).
+                self.running = False
+                break
 
             # Limit concurrency: wait if too many in-flight
             while len(pending) >= MAX_CONCURRENT_CHUNKS:
@@ -253,6 +280,21 @@ class MeetingPipeline:
             await asyncio.gather(*pending.values(), return_exceptions=True)
         # Emit any remaining results
         await _emit_ready()
+
+        await manager.broadcast(
+            self.meeting_id,
+            {
+                "type": "status",
+                "data": asdict(
+                    MeetingStatusEvent(
+                        meeting_id=self.meeting_id,
+                        recording=False,
+                        speakers_detected=self.clusterer.reported_speaker_count(),
+                        duration_s=max(0.0, time.time() - self.start_epoch),
+                    )
+                ),
+            },
+        )
 
     def _assign_speakers(
         self,

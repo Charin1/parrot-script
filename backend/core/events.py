@@ -8,6 +8,7 @@ class AudioChunkEvent:
     data: bytes
     timestamp: float
     chunk_index: int
+    total_chunks: int | None = None
 
 
 @dataclass

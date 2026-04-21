@@ -13,15 +13,16 @@ import { PlusIcon, MenuIcon } from './components/icons'
 import { useAuth } from './hooks/useAuth'
 import { useTheme } from './hooks/useTheme'
 import { useWebSocket, type StreamConnectionState } from './hooks/useWebSocket'
-import type { MeetingStatus, PlaybackSyncSource, Segment, SummaryProgress } from './types/models'
+import type { MeetingStatus, PlaybackSyncSource, Segment, SummaryProgress, TranscriptProgress } from './types/models'
 import { VideoPlayer } from './components/VideoPlayer'
+import { UploadMeetingView } from './components/UploadMeetingView'
 
 function App() {
   const [busy, setBusy] = useState(false)
   const [appError, setAppError] = useState<string | null>(null)
   const [appNotice, setAppNotice] = useState<string | null>(null)
   const [newTitle, setNewTitle] = useState('Weekly Sync')
-  const [viewMode, setViewMode] = useState<'workspace' | 'dashboard' | 'config'>('workspace')
+  const [viewMode, setViewMode] = useState<'workspace' | 'dashboard' | 'upload' | 'config'>('workspace')
   const [dashboardTab, setDashboardTab] = useState<'search' | 'list'>('list')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [videoExpanded, setVideoExpanded] = useState(false)
@@ -34,6 +35,7 @@ function App() {
   const [status, setStatus] = useState<MeetingStatus | undefined>(undefined)
   const [summaryProgress, setSummaryProgress] = useState<SummaryProgress | null>(null)
   const [summaryProcessing, setSummaryProcessing] = useState(false)
+  const [transcriptProgress, setTranscriptProgress] = useState<TranscriptProgress | null>(null)
   const [connectionState, setConnectionState] = useState<StreamConnectionState>('idle')
 
   const { mode, resolved, setMode } = useTheme()
@@ -78,6 +80,7 @@ function App() {
     setSegments,
     setStatus,
     setSummaryProgress,
+    setTranscriptProgress,
     setConnectionState,
     (data) => {
       setSummaryProcessing(false)
@@ -388,18 +391,25 @@ function App() {
             >
               Current Meeting
             </button>
-            <button
-              type="button"
-              className={`nav-btn ${viewMode === 'dashboard' ? '' : 'secondary'}`}
-              onClick={() => setViewMode('dashboard')}
-            >
-              Past Dashboard
-            </button>
-            <button
-              type="button"
-              className={`nav-btn ${viewMode === 'config' ? '' : 'secondary'}`}
-              onClick={() => setViewMode('config')}
-            >
+	            <button
+	              type="button"
+	              className={`nav-btn ${viewMode === 'dashboard' ? '' : 'secondary'}`}
+	              onClick={() => setViewMode('dashboard')}
+	            >
+	              Past Dashboard
+	            </button>
+	            <button
+	              type="button"
+	              className={`nav-btn ${viewMode === 'upload' ? '' : 'secondary'}`}
+	              onClick={() => setViewMode('upload')}
+	            >
+	              Upload Meeting
+	            </button>
+	            <button
+	              type="button"
+	              className={`nav-btn ${viewMode === 'config' ? '' : 'secondary'}`}
+	              onClick={() => setViewMode('config')}
+	            >
               Configuration
             </button>
           </div>
@@ -531,8 +541,8 @@ function App() {
                   </>
                 )}
 
-                {viewMode === 'workspace' && (
-                  <>
+	                {viewMode === 'workspace' && (
+	                  <>
                     <MeetingControls
                       meeting={selectedMeeting}
                       liveDurationS={effectiveStatus?.duration_s ?? 0}
@@ -591,9 +601,25 @@ function App() {
                       onPlaybackTimeChange={handlePlaybackTimeChange}
                       onPlaybackPlayStateChange={handlePlaybackPlayStateChange}
                     />
-                  </>
-                )}
-              </div>
+	                  </>
+	                )}
+
+	                {viewMode === 'upload' && (
+	                  <UploadMeetingView
+	                    disabled={!authReady || busy}
+	                    activeMeetingId={selectedMeetingId}
+	                    transcriptProgress={transcriptProgress}
+	                    onImported={(meetingId) => {
+	                      setSelectedMeetingId(meetingId)
+	                      void refreshMeetings()
+	                    }}
+	                    onSelectMeeting={(meetingId) => {
+	                      setSelectedMeetingId(meetingId)
+	                      setViewMode('workspace')
+	                    }}
+	                  />
+	                )}
+	              </div>
               <InsightsSidebar
                 summary={summary}
                 onGenerate={() => void generateSummary()}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { getApiToken, getBackendOrigin } from '../api/client'
-import type { MeetingStatus, Segment, Summary, SummaryProgress } from '../types/models'
+import type { MeetingStatus, Segment, Summary, SummaryProgress, TranscriptProgress } from '../types/models'
 
 const MAX_SEGMENTS = 2000
 const UNAUTHORIZED_CLOSE_CODE = 4401
@@ -40,6 +40,7 @@ export function useWebSocket(
   setSegments: (val: Segment[] | ((prev: Segment[]) => Segment[])) => void,
   setStatus: (val: MeetingStatus | undefined) => void,
   setSummaryProgress: (val: SummaryProgress | null) => void,
+  setTranscriptProgress: (val: TranscriptProgress | null) => void,
   setConnectionState: (val: StreamConnectionState) => void,
   onSummaryCompleted?: (summary: Summary) => void,
   onSummaryFailed?: (payload: { meeting_id?: string; error?: string }) => void
@@ -76,6 +77,7 @@ export function useWebSocket(
       setSegments([])
       setStatus(undefined)
       setSummaryProgress(null)
+      setTranscriptProgress(null)
       setConnectionState('idle')
       transcriptMessageCountRef.current = 0
       return
@@ -85,6 +87,7 @@ export function useWebSocket(
     setSegments([])
     setStatus(undefined)
     setSummaryProgress(null)
+    setTranscriptProgress(null)
     transcriptMessageCountRef.current = 0
 
     let cancelled = false
@@ -157,11 +160,21 @@ export function useWebSocket(
               console.info(`[ws] transcript meeting=${meetingId ?? ''} segments=${n} t=${start}-${end}`)
             }
           } else if (msg.type === 'status' && msg.data) {
-            setStatus(msg.data as MeetingStatus)
+            const status = msg.data as MeetingStatus
+            setStatus(status)
+            if (!status.recording) {
+              setTranscriptProgress(null)
+            }
           } else if (msg.type === 'summary_progress' && msg.data) {
             const progress = msg.data as SummaryProgress
             setSummaryProgress(progress)
             console.info(`[ws] summary_progress meeting=${progress.meeting_id} ${progress.current}/${progress.total}`)
+          } else if (msg.type === 'transcript_progress' && msg.data) {
+            const progress = msg.data as TranscriptProgress
+            setTranscriptProgress(progress)
+            if (progress.current === 1 || progress.current % 20 === 0 || progress.current === progress.total) {
+              console.info(`[ws] transcript_progress meeting=${progress.meeting_id} ${progress.current}/${progress.total}`)
+            }
           } else if (msg.type === 'summary_completed' && msg.data) {
             setSummaryProgress(null)
             if (onSummaryCompletedRef.current) {
