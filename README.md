@@ -13,6 +13,16 @@ Parrot Script is a local-first meeting workspace for system-audio capture, Whisp
 
 After setup, the normal runtime does not require internet access. The browser UI, backend API, and Ollama can all stay on loopback (`127.0.0.1`).
 
+## 🚀 Quick Start
+
+If you have already performed the [One-Time Setup](#one-time-setup), you can start both the backend and frontend with a single command:
+
+```bash
+./run_dev.sh
+```
+
+This script handles virtual environment detection and ensures both services are stopped cleanly when you press `CTRL+C`.
+
 ## Project Layout
 
 - `backend/`: API, transcription pipeline, diarization, storage, summarization
@@ -164,7 +174,9 @@ Config is loaded from [backend/config.py](/Users/charinpatel/workspace/projects/
 | `SPEAKER_CLUSTER_THRESHOLD` | `0.85` | Speaker clustering threshold |
 | `EMBEDDING_WINDOW_SIZE` | `50` | Speaker embedding history size |
 | `SUMMARY_CHUNK_SIZE` | `3000` | Transcript chunk size for map-reduce summary |
-| `SUMMARY_MAX_TOKENS` | `1000` | Max generated tokens from Ollama |
+| `SUMMARY_OVERLAP_TOKENS` | `400` | Overlap between chunks to maintain context |
+| `SUMMARY_MAX_TOKENS` | `2000` | Max generated tokens from Ollama |
+| `OLLAMA_NUM_CTX` | `8192` | Input context window for Ollama |
 
 Notes:
 
@@ -229,6 +241,14 @@ It launches:
 
 - Ollama on `127.0.0.1:11434`
 - The backend server on `127.0.0.1:8000`
+
+### Integrated Developer Run
+
+To start both the backend and frontend in one terminal:
+
+```bash
+./run_dev.sh
+```
 
 ## Network Behavior
 

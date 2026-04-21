@@ -1585,6 +1585,10 @@ code {
   overflow: hidden; /* prevents layout breakage */
 }
 
+.workspace-layout.no-sidebar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .workspace-main {
   display: flex;
   flex-direction: column;

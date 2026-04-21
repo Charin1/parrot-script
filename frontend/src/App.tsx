@@ -176,10 +176,14 @@ function App() {
   }, [authReady, refreshMeetings])
 
   useEffect(() => {
+    // Immediately clear state when switching meetings to prevent ghosting
+    setSummary(null)
+    setSummaryProcessing(false)
+    setSegments([])
+    setSummaryProgress(null)
+    setTranscriptProgress(null)
+
     if (!authReady || !selectedMeetingId) {
-      setSummary(null)
-      setSummaryProcessing(false)
-      setSegments([])
       return
     }
 
@@ -222,7 +226,7 @@ function App() {
       })
 
     return () => controller.abort()
-  }, [authReady, selectedMeetingId, setSegments])
+  }, [authReady, selectedMeetingId, setSegments, setSummary, setSummaryProcessing, setSummaryProgress, setTranscriptProgress])
 
   useEffect(() => {
     if (!authReady || !selectedMeetingId || selectedMeeting?.status !== 'recording') {
@@ -493,116 +497,116 @@ function App() {
               />
             </div>
           ) : (
-            <div className="workspace-layout">
+            <div className={`workspace-layout ${viewMode !== 'workspace' || !selectedMeetingId ? 'no-sidebar' : ''}`}>
               <div className="workspace-main">
-                {viewMode === 'dashboard' && (
-                  <>
-                    <div className="panel nav-panel" style={{ flexDirection: 'row', gap: '0.8rem', padding: '0.5rem 1rem' }}>
-                      <button
-                        type="button"
-                        className={`nav-btn ${dashboardTab === 'search' ? '' : 'secondary'}`}
-                        onClick={() => setDashboardTab('search')}
-                      >
-                        Semantic Search
-                      </button>
-                      <button
-                        type="button"
-                        className={`nav-btn ${dashboardTab === 'list' ? '' : 'secondary'}`}
-                        onClick={() => setDashboardTab('list')}
-                      >
-                        Past Meetings
-                      </button>
-                    </div>
-
-                    {dashboardTab === 'search' ? (
-                      <SearchBar
-                        disabled={!authReady}
-                        onSearch={(query, signal) => api.search(query, 10, signal)}
-                        onSelectMeeting={(meetingId) => {
-                          setAppError(null)
-                          setSelectedMeetingId(meetingId)
-                          setViewMode('workspace')
-                        }}
-                      />
-                    ) : (
-                      <PastMeetingsDashboard
-                        meetings={meetings}
-                        onOpenMeeting={(meetingId) => {
-                          setSelectedMeetingId(meetingId)
-                          setViewMode('workspace')
-                        }}
-                        onDeleteMeeting={(id) => {
-                          const m = meetings.find((x) => x.id === id)
-                          void deleteMeeting(id, m?.title || 'this meeting')
-                        }}
-                        onFiltersChange={handleDashboardFiltersChange}
-                      />
-                    )}
-                  </>
-                )}
-
-	                {viewMode === 'workspace' && (
-	                  <>
-                    <MeetingControls
-                      meeting={selectedMeeting}
-                      liveDurationS={effectiveStatus?.duration_s ?? 0}
-                      onStart={startMeeting}
-                      onStop={stopMeeting}
-                      busy={busy || !authReady}
-                    />
-                    {effectiveStatus ? (
-                      <div className="panel status-panel">
-                        {speakerCountLabel}: <strong>{effectiveStatus.speakers_detected}</strong> | Duration:{' '}
-                        <strong>{Math.round(effectiveStatus.duration_s)}s</strong>
-                      </div>
-                    ) : null}
-                    {videoEnabled ? (
-                      <div className="panel video-toggle-panel">
+                  {viewMode === 'dashboard' && (
+                    <div className="dashboard-panel">
+                      <div className="panel nav-panel" style={{ flexDirection: 'row', gap: '0.8rem', padding: '0.5rem 1rem' }}>
                         <button
                           type="button"
-                          className={videoExpanded ? '' : 'secondary'}
-                          onClick={() => setVideoExpanded((current) => !current)}
+                          className={`nav-btn ${dashboardTab === 'search' ? '' : 'secondary'}`}
+                          onClick={() => setDashboardTab('search')}
                         >
-                          {videoExpanded ? 'Minimize Video' : 'Video'}
+                          Semantic Search
                         </button>
-                        <span className="muted">{videoStatusHint}</span>
+                        <button
+                          type="button"
+                          className={`nav-btn ${dashboardTab === 'list' ? '' : 'secondary'}`}
+                          onClick={() => setDashboardTab('list')}
+                        >
+                          Past Meetings
+                        </button>
                       </div>
-                    ) : null}
-                    {videoEnabled && videoExpanded ? (
-                      lowBandwidth ? (
-                        <div className="panel video-low-bandwidth-panel">
-                          <span className="badge badge-idle">Video Ready</span>
-                          <span className="muted">Low Bandwidth Mode is on, so video loading is paused.</span>
-                          <button type="button" className="secondary" onClick={toggleLowBandwidth}>
-                            Load Video
-                          </button>
-                        </div>
-                      ) : videoSrc && selectedMeeting ? (
-                        <VideoPlayer
-                          src={videoSrc}
-                          meetingTitle={selectedMeeting.title}
-                          onDownload={
-                            selectedMeeting.has_video ? () => void api.downloadVideo(selectedMeeting.id) : undefined
-                          }
-                          onTimeUpdate={(time) => handlePlaybackTimeChange(time, 'video')}
-                          onPlayStateChange={(isPlaying) => handlePlaybackPlayStateChange(isPlaying, 'video')}
-                          syncTime={playbackTime}
-                          syncPlaying={playbackPlaying}
-                          syncSource={playbackSource}
+
+                      {dashboardTab === 'search' ? (
+                        <SearchBar
+                          disabled={!authReady}
+                          onSearch={(query, signal) => api.search(query, 10, signal)}
+                          onSelectMeeting={(meetingId) => {
+                            setAppError(null)
+                            setSelectedMeetingId(meetingId)
+                            setViewMode('workspace')
+                          }}
                         />
-                      ) : null
-                    ) : null}
-                    <LiveTranscript
-                      segments={segments}
-                      meetingId={selectedMeetingId}
-                      playbackTime={playbackTime}
-                      playbackPlaying={playbackPlaying}
-                      playbackSource={playbackSource}
-                      onPlaybackTimeChange={handlePlaybackTimeChange}
-                      onPlaybackPlayStateChange={handlePlaybackPlayStateChange}
-                    />
-	                  </>
-	                )}
+                      ) : (
+                        <PastMeetingsDashboard
+                          meetings={meetings}
+                          onOpenMeeting={(meetingId) => {
+                            setSelectedMeetingId(meetingId)
+                            setViewMode('workspace')
+                          }}
+                          onDeleteMeeting={(id) => {
+                            const m = meetings.find((x) => x.id === id)
+                            void deleteMeeting(id, m?.title || 'this meeting')
+                          }}
+                          onFiltersChange={handleDashboardFiltersChange}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {viewMode === 'workspace' && (
+                    <>
+                      <MeetingControls
+                        meeting={selectedMeeting}
+                        liveDurationS={effectiveStatus?.duration_s ?? 0}
+                        onStart={startMeeting}
+                        onStop={stopMeeting}
+                        busy={busy || !authReady}
+                      />
+                      {effectiveStatus ? (
+                        <div className="panel status-panel">
+                          {speakerCountLabel}: <strong>{effectiveStatus.speakers_detected}</strong> | Duration:{' '}
+                          <strong>{Math.round(effectiveStatus.duration_s)}s</strong>
+                        </div>
+                      ) : null}
+                      {videoEnabled ? (
+                        <div className="panel video-toggle-panel">
+                          <button
+                            type="button"
+                            className={videoExpanded ? '' : 'secondary'}
+                            onClick={() => setVideoExpanded((current) => !current)}
+                          >
+                            {videoExpanded ? 'Minimize Video' : 'Video'}
+                          </button>
+                          <span className="muted">{videoStatusHint}</span>
+                        </div>
+                      ) : null}
+                      {videoEnabled && videoExpanded ? (
+                        lowBandwidth ? (
+                          <div className="panel video-low-bandwidth-panel">
+                            <span className="badge badge-idle">Video Ready</span>
+                            <span className="muted">Low Bandwidth Mode is on, so video loading is paused.</span>
+                            <button type="button" className="secondary" onClick={toggleLowBandwidth}>
+                              Load Video
+                            </button>
+                          </div>
+                        ) : videoSrc && selectedMeeting ? (
+                          <VideoPlayer
+                            src={videoSrc}
+                            meetingTitle={selectedMeeting.title}
+                            onDownload={
+                              selectedMeeting.has_video ? () => void api.downloadVideo(selectedMeeting.id) : undefined
+                            }
+                            onTimeUpdate={(time) => handlePlaybackTimeChange(time, 'video')}
+                            onPlayStateChange={(isPlaying) => handlePlaybackPlayStateChange(isPlaying, 'video')}
+                            syncTime={playbackTime}
+                            syncPlaying={playbackPlaying}
+                            syncSource={playbackSource}
+                          />
+                        ) : null
+                      ) : null}
+                      <LiveTranscript
+                        segments={segments}
+                        meetingId={selectedMeetingId}
+                        playbackTime={playbackTime}
+                        playbackPlaying={playbackPlaying}
+                        playbackSource={playbackSource}
+                        onPlaybackTimeChange={handlePlaybackTimeChange}
+                        onPlaybackPlayStateChange={handlePlaybackPlayStateChange}
+                      />
+                    </>
+                  )}
 
 	                {viewMode === 'upload' && (
 	                  <UploadMeetingView
@@ -620,14 +624,17 @@ function App() {
 	                  />
 	                )}
 	              </div>
-              <InsightsSidebar
-                summary={summary}
-                onGenerate={() => void generateSummary()}
-                busy={busy || summaryProcessing}
-                disabled={!authReady}
-                error={appError}
-                progress={summaryProgress}
-              />
+              
+              {viewMode === 'workspace' && selectedMeetingId && (
+                <InsightsSidebar
+                  summary={summary}
+                  onGenerate={() => void generateSummary()}
+                  busy={busy || summaryProcessing}
+                  disabled={!authReady}
+                  error={appError}
+                  progress={summaryProgress}
+                />
+              )}
             </div>
           )}
         </main>
