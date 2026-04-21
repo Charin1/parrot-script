@@ -24,9 +24,10 @@ def _split_long_line(line: str, max_tokens: int) -> list[str]:
     return chunks
 
 
-def chunk_transcript(transcript: str, max_tokens: int = 3000) -> list[str]:
+def chunk_transcript(transcript: str, max_tokens: int = 3000, overlap_tokens: int = 400) -> list[str]:
     """
-    Split transcript by speaker turns (lines), keeping each chunk under max_tokens.
+    Split transcript by speaker turns (lines), keeping each chunk under max_tokens
+    while maintaining overlap_tokens of context from the previous chunk.
     """
     if not transcript.strip():
         return []
@@ -34,31 +35,59 @@ def chunk_transcript(transcript: str, max_tokens: int = 3000) -> list[str]:
     lines = [line.strip() for line in transcript.splitlines() if line.strip()]
     chunks: list[str] = []
     current_lines: list[str] = []
+    current_tokens = 0
 
-    for line in lines:
+    for i, line in enumerate(lines):
         line_token_estimate = estimate_tokens(line)
 
+        # Handle ultra-long single lines by splitting them
         if line_token_estimate > max_tokens:
-            for piece in _split_long_line(line, max_tokens):
+            split_pieces = _split_long_line(line, max_tokens - overlap_tokens)
+            for piece in split_pieces:
                 piece_tokens = estimate_tokens(piece)
-                current_text = "\n".join(current_lines)
-                if current_lines and estimate_tokens(current_text) + piece_tokens > max_tokens:
-                    chunks.append(current_text)
-                    current_lines = [piece]
+                if current_lines and current_tokens + piece_tokens > max_tokens:
+                    chunks.append("\n".join(current_lines))
+                    # Start new chunk with overlap from current lines
+                    # For simplicity in speaker-turn based chunking, we take the last few lines
+                    overlap_context = []
+                    overlap_size = 0
+                    for rev_line in reversed(current_lines):
+                        rev_tokens = estimate_tokens(rev_line)
+                        if overlap_size + rev_tokens > overlap_tokens:
+                            break
+                        overlap_context.insert(0, rev_line)
+                        overlap_size += rev_tokens
+                    
+                    current_lines = overlap_context + [piece]
+                    current_tokens = overlap_size + piece_tokens
                 else:
                     current_lines.append(piece)
+                    current_tokens += piece_tokens
             continue
 
-        candidate_lines = current_lines + [line]
-        candidate_text = "\n".join(candidate_lines)
-
-        if current_lines and estimate_tokens(candidate_text) > max_tokens:
+        if current_lines and current_tokens + line_token_estimate > max_tokens:
             chunks.append("\n".join(current_lines))
-            current_lines = [line]
+            
+            # Create overlap for the next chunk
+            overlap_context = []
+            overlap_size = 0
+            for rev_line in reversed(current_lines):
+                rev_tokens = estimate_tokens(rev_line)
+                if overlap_size + rev_tokens > overlap_tokens:
+                    break
+                overlap_context.insert(0, rev_line)
+                overlap_size += rev_tokens
+            
+            current_lines = overlap_context + [line]
+            current_tokens = overlap_size + line_token_estimate
         else:
-            current_lines = candidate_lines
+            current_lines.append(line)
+            current_tokens += line_token_estimate
 
     if current_lines:
+        # Check if the last chunk is just overlap from the previous one
+        # If it's small and we already have chunks, maybe skip or merge?
+        # For now, always append the remainder.
         chunks.append("\n".join(current_lines))
 
     return chunks

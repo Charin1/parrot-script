@@ -76,7 +76,9 @@ class Settings(BaseSettings):
 
     # Summarization
     summary_chunk_size: int = 3000
-    summary_max_tokens: int = 1000
+    summary_overlap_tokens: int = 400
+    summary_max_tokens: int = 2000
+    ollama_num_ctx: int = 8192
 
     @field_validator("cors_origins", mode="before")
     @classmethod

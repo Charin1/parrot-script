@@ -16,13 +16,24 @@ export function InsightsSidebar({ summary, onGenerate, busy, disabled, error, pr
   const startTimeRef = useRef<number | null>(null)
   
   // Parse structured data safely
-  const parseJSON = (jsonStr: string | undefined): string[] => {
+  const parseJSON = (jsonStr: string | undefined): any[] => {
     if (!jsonStr) return []
     try {
       return JSON.parse(jsonStr)
     } catch (e) {
       return []
     }
+  }
+
+  const renderItem = (item: any) => {
+    if (typeof item === 'string') return item
+    if (typeof item === 'object' && item !== null) {
+      // Handle {item, attributed_to} or similar
+      const val = item.item || item.task || item.decision || JSON.stringify(item)
+      const attr = item.attributed_to || item.owner
+      return attr ? `${val} (Owner: ${attr})` : val
+    }
+    return String(item)
   }
 
   // Effect to handle time estimation
@@ -173,7 +184,7 @@ export function InsightsSidebar({ summary, onGenerate, busy, disabled, error, pr
                   {actionItems.map((item, i) => (
                     <li key={i} className="action-item-row">
                       <div className="action-item-check" />
-                      <span>{item}</span>
+                      <span>{renderItem(item)}</span>
                     </li>
                   ))}
                 </ul>
@@ -195,7 +206,7 @@ export function InsightsSidebar({ summary, onGenerate, busy, disabled, error, pr
                   {decisions.map((item, i) => (
                     <li key={i} className="decision-row">
                       <div className="decision-bullet" />
-                      <span>{item}</span>
+                      <span>{renderItem(item)}</span>
                     </li>
                   ))}
                 </ul>

@@ -51,7 +51,11 @@ class MeetingSummarizer:
             prompt_prefix += "\n\n"
 
         if estimate_tokens(transcript) > settings.summary_chunk_size:
-            chunks = chunk_transcript(transcript, max_tokens=settings.summary_chunk_size)
+            chunks = chunk_transcript(
+                transcript, 
+                max_tokens=settings.summary_chunk_size,
+                overlap_tokens=settings.summary_overlap_tokens
+            )
             logger.info(f"Summarizing meeting {meeting_id} in {len(chunks)} chunks (SEQUENTIAL MODE)")
             
             if on_progress:
@@ -97,36 +101,8 @@ class MeetingSummarizer:
                 await on_progress(1, 1)
 
 
-        # Clean result of markdown blocks if they exists
-        clean_result = result.strip()
-        if clean_result.startswith("```"):
-            # Strip lines starting with ``` (and potential json tag)
-            lines = clean_result.splitlines()
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines[-1].startswith("```"):
-                lines = lines[:-1]
-            clean_result = "\n".join(lines).strip()
-
         # Try to parse the result as JSON
-        try:
-            parsed = json.loads(clean_result)
-            summary_text = parsed.get("summary")
-            # Store arrays as JSON strings
-            action_items_str = json.dumps(parsed.get("action_items", []))
-            decisions_str = json.dumps(parsed.get("decisions", []))
-            
-            # If everything is empty, fallback to raw text
-            if not summary_text and not parsed.get("action_items") and not parsed.get("decisions"):
-                logger.warning("LLM returned valid JSON but all fields were empty. Falling back to raw text.")
-                summary_text = result
-                action_items_str = "[]"
-                decisions_str = "[]"
-        except (json.JSONDecodeError, AttributeError, ValueError) as exc:
-            logger.warning("JSON parsing failed (falling back to raw text): %r", exc)
-            summary_text = result
-            action_items_str = "[]"
-            decisions_str = "[]"
+        summary_text, action_items_str, decisions_str = self._extract_json(result)
 
         existing = await self.repo.get_by_meeting(meeting_id)
         if existing:
@@ -154,6 +130,83 @@ class MeetingSummarizer:
             "summary_id": saved["id"],
         }
 
+    def _extract_json(self, text: str) -> tuple[str, str, str]:
+        """
+        Robustly extract summary, action items, and decisions from LLM response.
+        Returns (summary, action_items_json_str, decisions_json_str).
+        """
+        clean_text = text.strip()
+        
+        # 1. Try direct parsing
+        try:
+            parsed = json.loads(clean_text)
+            return self._parse_fields(parsed, text)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # 2. Try to find markdown code blocks
+        import re
+        # Match ```json ... ``` or ``` ... ```
+        block_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+        if block_match:
+            try:
+                parsed = json.loads(block_match.group(1).strip())
+                return self._parse_fields(parsed, text)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # 3. Try to find the outermost braces
+        brace_match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if brace_match:
+            try:
+                parsed = json.loads(brace_match.group(1).strip())
+                return self._parse_fields(parsed, text)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # 4. Fallback to raw text
+        logger.warning("JSON parsing failed (falling back to raw text). Raw result: %s", text)
+        return text, "[]", "[]"
+
+    def _parse_fields(self, parsed: dict, raw_text: str) -> tuple[str, str, str]:
+        summary_text = parsed.get("summary")
+        action_items = parsed.get("action_items", [])
+        decisions = parsed.get("decisions", [])
+
+        # Ensure action_items and decisions are lists of strings
+        if isinstance(action_items, list):
+            sanitized_actions = []
+            for item in action_items:
+                if isinstance(item, dict):
+                    # Flatten object like {"item": "...", "attributed_to": "..."}
+                    val = item.get("item") or item.get("task") or str(item)
+                    attr = item.get("attributed_to") or item.get("owner")
+                    sanitized_actions.append(f"{val} (Owner: {attr})" if attr else str(val))
+                else:
+                    sanitized_actions.append(str(item))
+            action_items = sanitized_actions
+
+        if isinstance(decisions, list):
+            sanitized_decisions = []
+            for item in decisions:
+                if isinstance(item, dict):
+                    val = item.get("decision") or item.get("outcome") or str(item)
+                    sanitized_decisions.append(str(val))
+                else:
+                    sanitized_decisions.append(str(item))
+            decisions = sanitized_decisions
+
+        # If everything is empty, fallback to raw text
+        if not summary_text and not action_items and not decisions:
+            logger.warning("LLM returned valid JSON but all fields were empty. Falling back to raw text.")
+            return raw_text, "[]", "[]"
+
+        return (
+            str(summary_text or ""),
+            json.dumps(action_items),
+            json.dumps(decisions)
+        )
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -168,7 +221,10 @@ class MeetingSummarizer:
             # Removing strict 'format: json' as it can cause Ollama to hang or disconnect 
             # on some models/versions when under high system load. 
             # Our prompt and clean_result logic handles the extraction.
-            "options": {"num_predict": settings.summary_max_tokens},
+            "options": {
+                "num_predict": settings.summary_max_tokens,
+                "num_ctx": settings.ollama_num_ctx
+            },
         }
         url = f"{settings.ollama_base_url.rstrip('/')}/api/generate"
 
