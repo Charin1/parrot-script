@@ -426,6 +426,13 @@ export const api = {
     const response = await client.get(`/meetings/${id}/video`, { responseType: 'blob' })
     downloadBlob(response.data, `video_${id}.mp4`, 'video/mp4')
   },
+  async agentChat(meetingId: string, message: string, history: any[] = []): Promise<{ response: string; context_found: boolean; sources?: any[] }> {
+    const { data } = await client.post<{ response: string; context_found: boolean; sources?: any[] }>(
+      `/meetings/${meetingId}/agent/chat`,
+      { message, history }
+    )
+    return data
+  },
 }
 
 export type { AxiosError }

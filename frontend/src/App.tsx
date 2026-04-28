@@ -627,6 +627,7 @@ function App() {
               
               {viewMode === 'workspace' && selectedMeetingId && (
                 <InsightsSidebar
+                  meetingId={selectedMeetingId}
                   summary={summary}
                   onGenerate={() => void generateSummary()}
                   busy={busy || summaryProcessing}

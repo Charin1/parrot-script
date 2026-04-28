@@ -17,6 +17,7 @@ from backend.api.routes.native import router as native_router
 from backend.api.routes.search import router as search_router
 from backend.api.routes.summaries import router as summaries_router
 from backend.api.routes.transcripts import router as transcripts_router
+from backend.api.routes.agent import router as agent_router
 from backend.api.websocket import manager
 from backend.config import settings
 from backend.core.preflight import PreflightResult, run_preflight
@@ -62,6 +63,7 @@ app.include_router(transcripts_router)
 app.include_router(summaries_router)
 app.include_router(search_router)
 app.include_router(native_router)
+app.include_router(agent_router)
 
 
 @app.get("/health")

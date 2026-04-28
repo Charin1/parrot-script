@@ -369,7 +369,7 @@ async def _stream_media_file(
     )
 
 
-def _mux_audio_into_video(video_path: Path, audio_path: Path) -> bool:
+def _mux_audio_into_video(video_path: Path, audio_path: Path, video_start_offset: float = 0.0) -> bool:
     """Mux WAV audio into MP4 so video playback has an audio track."""
     if not video_path.exists() or video_path.stat().st_size == 0:
         return False
@@ -382,6 +382,8 @@ def _mux_audio_into_video(video_path: Path, audio_path: Path) -> bool:
         "-y",
         "-i",
         str(video_path),
+        "-ss",
+        str(video_start_offset),
         "-i",
         str(audio_path),
         "-map",
@@ -451,10 +453,10 @@ def _video_has_audio_track(video_path: Path) -> bool:
     return any(line.strip() == "audio" for line in result.stdout.splitlines())
 
 
-def _ensure_video_has_audio(video_path: Path, audio_path: Path) -> bool:
+def _ensure_video_has_audio(video_path: Path, audio_path: Path, video_start_offset: float = 0.0) -> bool:
     if _video_has_audio_track(video_path):
         return True
-    return _mux_audio_into_video(video_path, audio_path)
+    return _mux_audio_into_video(video_path, audio_path, video_start_offset)
 
 
 @router.post('/')
@@ -587,7 +589,31 @@ async def start_recording(request: Request, meeting_id: UUID, body: Optional[Sta
         raise HTTPException(status_code=404, detail='Meeting not found')
 
     async with _pipeline_lock:
-        if meeting_id_str in active_pipelines:
+        active_pipeline = active_pipelines.get(meeting_id_str)
+        if active_pipeline:
+            # Check if we are switching recording types
+            new_recording_type = body.recording_type or 'audio'
+            if active_pipeline.capture_source.kind == 'local_audio' and new_recording_type == 'video_audio':
+                # Switch from audio to video
+                logger.info("Seamlessly switching meeting %s to video recording", meeting_id_str)
+                video_start_offset = active_pipeline.capture_source.get_current_duration()
+                video_resolution = body.video_resolution or settings.video_default_resolution
+                
+                new_source = LocalVideoAudioSource(
+                    meeting_id_str,
+                    resolution=video_resolution,
+                    ghost_mode=resolve_capture_mode(body.capture_mode, body.ghost_mode)[1],
+                )
+                
+                await active_pipeline.switch_source(new_source)
+                await meetings_repo.update(
+                    meeting_id_str,
+                    recording_type='video_audio',
+                    video_resolution=video_resolution,
+                    video_start_offset=video_start_offset
+                )
+                return {'status': 'recording', 'meeting_id': meeting_id_str, 'message': 'Switched to video recording.'}
+            
             return {'status': 'recording', 'meeting_id': meeting_id_str, 'message': None}
 
     body = body or StartMeetingRequest()
@@ -745,7 +771,8 @@ async def stop_recording(meeting_id: UUID) -> dict[str, str]:
     video_path = Path(settings.db_path).parent / f"{meeting_id_str}.mp4"
     audio_path = Path(settings.db_path).parent / f"{meeting_id_str}.wav"
     if meeting.get("recording_type") == "video_audio":
-        await asyncio.to_thread(_ensure_video_has_audio, video_path, audio_path)
+        offset = float(meeting.get("video_start_offset") or 0.0)
+        await asyncio.to_thread(_ensure_video_has_audio, video_path, audio_path, offset)
 
     # Mark video availability if a video file was produced
     if video_path.exists() and video_path.stat().st_size > 0:
@@ -781,5 +808,6 @@ async def get_meeting_video(meeting_id: UUID, request: Request) -> Response:
     audio_path = Path(settings.db_path).parent / f"{meeting_id_str}.wav"
     if meeting.get("recording_type") == "video_audio":
         # Best-effort: if this is an older recording or mux was missed, repair on access.
-        await asyncio.to_thread(_ensure_video_has_audio, video_path, audio_path)
+        offset = float(meeting.get("video_start_offset") or 0.0)
+        await asyncio.to_thread(_ensure_video_has_audio, video_path, audio_path, offset)
     return await _stream_media_file(video_path, 'video/mp4', request)

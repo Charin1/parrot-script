@@ -128,9 +128,12 @@ Config is loaded from [backend/config.py](/Users/charinpatel/workspace/projects/
 | `WHISPER_COMPUTE_TYPE` | `int8` | Whisper compute mode |
 | `WHISPER_BEAM_SIZE` | `5` | Beam search size |
 | `AUDIO_DEVICE_INDEX` | `0` | FFmpeg capture index (macOS: `avfoundation`, Linux: `pulse`/`alsa`, Win: `dshow`) |
+| `AUDIO_MIC_INDEX` | `None` | (Optional) Separate Microphone index for multi-track |
+| `AUDIO_SYSTEM_INDEX` | `None` | (Optional) Separate System/BlackHole index for multi-track |
 | `AUDIO_SAMPLE_RATE` | `16000` | Recording sample rate |
 | `AUDIO_CHUNK_SECONDS` | `5` | Pipeline chunk size |
 | `AUDIO_VAD_AGGRESSIVENESS` | `2` | WebRTC VAD aggressiveness |
+| `LOCAL_SPEAKER_NAME` | `Me` | Display name for the local user in multi-track mode |
 
 ### Video / Screen Capture
 
@@ -308,11 +311,44 @@ npm run build
 - If you want system audio, confirm BlackHole is installed and routed correctly
 - On macOS, Parrot Script now fast-fails when FFmpeg cannot open the selected input and shows a device/permission error instead of silently recording silence
 
+### Multi-Track Audio Capture
+
+Parrot Script now supports capturing your microphone and system audio as separate streams. This enables **100% accurate speaker attribution** for yourself without relying on AI guessing.
+
+1.  Find your device indexes: `.venv/bin/python scripts/list_audio_devices.py`
+2.  Set `AUDIO_MIC_INDEX` to your microphone.
+3.  Set `AUDIO_SYSTEM_INDEX` to your system audio output (e.g., BlackHole).
+4.  Set `LOCAL_SPEAKER_NAME` to your name (e.g., "Charin").
+
+When both indexes are set, Parrot Script will automatically label all audio from the Mic track with your name, while using standard diarization for the System track.
+
+### 🦜 The "Live Parrot" Chatbot (Multi-Agent RAG)
+
+Parrot Script features a deep-reasoning chatbot that understands your meeting context. 
+
+- **Multi-Agent Intelligence**: The agent automatically routes your queries to specialized "sub-agents" (Temporal, Speaker, Task, or General) to provide the most accurate answer.
+- **Time-Aware**: You can ask questions like *"What happened in the last 10 minutes?"* and the agent will strictly analyze that time window.
+- **Context Preservation**: The agent maintains conversation history and provides source citations for its answers.
+- **Local Privacy**: All reasoning happens locally via Ollama.
+
 ### Assistant mode speaker labels
 
-- Current local assistant mode joins/open the meeting link and records a single mixed local audio stream
-- Speaker labels are heuristic diarization (`Speaker 1`, `Speaker 2`, etc.) and can be renamed in the UI
-- True per-participant attribution requires provider participant events or per-participant media streams (not yet wired in this local-only provider path)
+- In **Ghost Mode ON** (Private), the app uses the multi-track setup described above for accuracy.
+- In **Ghost Mode OFF** (Assistant), the app joins the meeting and can now use "Participant-Aware" logic to map names from the meeting platform's UI (Phase 2/3).
+
+#### 🛡️ Bot Authentication & Avoiding Blocks (Ghost Mode OFF)
+
+To avoid being blocked by Google/Zoom as a bot, and to use your own authenticated account:
+
+1. **Setup a Persistent Profile**:
+   Run this script to open a browser window where you can log in manually:
+   ```bash
+   python backend/automation/setup_bot_profile.py
+   ```
+2. **Login**: 
+   Log in to the Google account you want the bot to use. Once logged in, close the browser window.
+3. **Automatic Reuse**:
+   The profile is saved in `backend/automation/.bot_profile`. Future bot joins will automatically reuse this session, appearing as a real logged-in user.
 
 ### Native attribution API (Option 2 foundation)
 

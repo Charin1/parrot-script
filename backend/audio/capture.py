@@ -19,8 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 class AudioCapture:
-    def __init__(self, device_index: int, sample_rate: int = 16000, chunk_seconds: int = 5, record_to_file: Optional[Path] = None):
+    def __init__(self, device_index: int, mic_index: Optional[int] = None, system_index: Optional[int] = None, sample_rate: int = 16000, chunk_seconds: int = 5, record_to_file: Optional[Path] = None):
         self.device_index = device_index
+        self.mic_index = mic_index
+        self.system_index = system_index
         self.sample_rate = sample_rate
         self.chunk_seconds = chunk_seconds
         self.record_to_file = record_to_file
@@ -30,6 +32,7 @@ class AudioCapture:
         self._process: Optional[subprocess.Popen] = None
         self._reader_thread_handle: Optional[threading.Thread] = None
         self._stderr_thread_handle: Optional[threading.Thread] = None
+        self._wav_fd: Optional[Any] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._running = False
         self._chunk_index: int = 0
@@ -55,33 +58,18 @@ class AudioCapture:
                     with wave.open(str(self.record_to_file), 'rb') as old_wav:
                         old_nframes = old_wav.getnframes()
                         old_rate = old_wav.getframerate()
-                        old_channels = old_wav.getnchannels()
-                        old_sampwidth = old_wav.getsampwidth()
-                        old_frames = old_wav.readframes(old_nframes)
                         self._start_offset_s = old_nframes / old_rate
-                    logger.info(
-                        "Read %d old frames (%.1fs, %d bytes) from existing WAV",
-                        old_nframes, self._start_offset_s, len(old_frames)
-                    )
-                    self._wav_file = wave.open(str(self.record_to_file), 'wb')
-                    self._wav_file.setnchannels(old_channels)
-                    self._wav_file.setsampwidth(old_sampwidth)
-                    self._wav_file.setframerate(old_rate)
-                    # Do NOT call setnframes — leave at 0 so the wave module
-                    # calculates data length dynamically as frames are written.
-                    self._wav_file.writeframes(old_frames)
-                    logger.info("Re-wrote old frames to WAV; file ready for appending")
+                    # Open for binary append - no slow re-reading of frames!
+                    self._wav_fd = open(self.record_to_file, 'ab')
+                    logger.info("Ready to append to WAV (current offset: %.2fs)", self._start_offset_s)
                 except Exception as e:
-                    logger.error("Failed to append to existing wav file: %s", e)
-                    self._wav_file = wave.open(str(self.record_to_file), 'wb')
-                    self._wav_file.setnchannels(1)
-                    self._wav_file.setsampwidth(2)
-                    self._wav_file.setframerate(self.sample_rate)
+                    logger.error("Failed to open existing wav for append: %s", e)
+                    # Fallback: create fresh
+                    self._wav_fd = open(self.record_to_file, 'wb')
+                    self._write_initial_wav_header(self._wav_fd)
             else:
-                self._wav_file = wave.open(str(self.record_to_file), 'wb')
-                self._wav_file.setnchannels(1)
-                self._wav_file.setsampwidth(2) # 16-bit
-                self._wav_file.setframerate(self.sample_rate)
+                self._wav_fd = open(self.record_to_file, 'wb')
+                self._write_initial_wav_header(self._wav_fd)
 
         self._loop = asyncio.get_running_loop()
         try:
@@ -146,22 +134,96 @@ class AudioCapture:
         # Clear after threads have had a chance to exit cleanly.
         self._process = None
 
-        if self._wav_file:
+        if self._wav_fd:
             try:
-                nframes = self._wav_file.getnframes() if hasattr(self._wav_file, 'getnframes') else 'unknown'
-                logger.info("Closing WAV file. Frames written: %s", nframes)
-                self._wav_file.close()
-                if self.record_to_file:
-                    file_size = self.record_to_file.stat().st_size if self.record_to_file.exists() else 0
-                    logger.info("WAV file closed. Final size: %d bytes (%.1f KB)", file_size, file_size / 1024)
+                self._wav_fd.close()
+                self._finalize_wav_header()
             except Exception as e:
-                logger.error("Failed to close wav file: %s", e)
+                logger.error("Failed to finalize wav header: %s", e)
             finally:
-                self._wav_file = None
+                self._wav_fd = None
+
+    def _write_initial_wav_header(self, fd: Any) -> None:
+        """Write a 44-byte PCM WAV header with placeholder sizes."""
+        import struct
+        # RIFF header
+        fd.write(b'RIFF')
+        fd.write(struct.pack('<I', 0)) # Placeholder for RIFF chunk size
+        fd.write(b'WAVE')
+        # fmt chunk
+        fd.write(b'fmt ')
+        fd.write(struct.pack('<I', 16)) # Subchunk1Size (16 for PCM)
+        fd.write(struct.pack('<H', 1))  # AudioFormat (1 for PCM)
+        fd.write(struct.pack('<H', 1))  # NumChannels (1 for mono)
+        fd.write(struct.pack('<I', self.sample_rate))
+        fd.write(struct.pack('<I', self.sample_rate * 2)) # ByteRate
+        fd.write(struct.pack('<H', 2)) # BlockAlign
+        fd.write(struct.pack('<H', 16)) # BitsPerSample
+        # data chunk
+        fd.write(b'data')
+        fd.write(struct.pack('<I', 0)) # Placeholder for data chunk size
+
+    def _finalize_wav_header(self) -> None:
+        """Update RIFF and data chunk sizes in the WAV header based on actual file size."""
+        if not self.record_to_file or not self.record_to_file.exists():
+            return
+
+        import struct
+        file_size = self.record_to_file.stat().st_size
+        if file_size < 44:
+            return
+
+        data_size = file_size - 44
+        riff_size = file_size - 8
+
+        try:
+            with open(self.record_to_file, 'r+b') as f:
+                # Update RIFF chunk size at offset 4
+                f.seek(4)
+                f.write(struct.pack('<I', riff_size))
+                # Update data chunk size at offset 40
+                f.seek(40)
+                f.write(struct.pack('<I', data_size))
+            logger.info("WAV header finalized: %s (duration: %.1fs)", self.record_to_file, data_size / (self.sample_rate * 2))
+        except Exception as e:
+            logger.error("Error updating WAV header for %s: %s", self.record_to_file, e)
 
     def _build_ffmpeg_cmd(self) -> list[str]:
         import sys
 
+        # If both indices are provided, we use multi-track capture
+        if self.mic_index is not None and self.system_index is not None:
+            if sys.platform == "darwin":
+                fmt = "avfoundation"
+                mic_dev = f":{self.mic_index}"
+                sys_dev = f":{self.system_index}"
+            elif sys.platform == "win32":
+                fmt = "dshow"
+                mic_dev = f"audio={self.mic_index}"
+                sys_dev = f"audio={self.system_index}"
+            else:
+                fmt = "pulse"
+                mic_dev = str(self.mic_index)
+                sys_dev = str(self.system_index)
+
+            # Use filter_complex to merge two mono inputs into a single stereo stream
+            # Track 0 (Mic) -> Left Channel
+            # Track 1 (System) -> Right Channel
+            return [
+                "ffmpeg",
+                "-f", fmt, "-i", mic_dev,
+                "-f", fmt, "-i", sys_dev,
+                "-filter_complex", "[0:a][1:a]amerge=inputs=2[a]",
+                "-map", "[a]",
+                "-ac", "2",
+                "-ar", str(self.sample_rate),
+                "-acodec", "pcm_s16le",
+                "-f", "s16le",
+                "-bufsize", "65536",
+                "pipe:1",
+            ]
+
+        # Standard single-track capture fallback
         resolved_device = self._resolve_device_index()
         self._resolved_device_index = resolved_device
 
@@ -172,25 +234,18 @@ class AudioCapture:
             fmt = "dshow"
             input_device = f"audio={resolved_device}"
         else:
-            fmt = "pulse" # Default to pulse on linux
+            fmt = "pulse"
             input_device = "default" if str(resolved_device) == "0" else str(resolved_device)
 
         return [
             "ffmpeg",
-            "-f",
-            fmt,
-            "-i",
-            input_device,
-            "-ac",
-            "1",
-            "-ar",
-            str(self.sample_rate),
-            "-acodec",
-            "pcm_s16le",
-            "-f",
-            "s16le",
-            "-bufsize",
-            "65536",
+            "-f", fmt,
+            "-i", input_device,
+            "-ac", "1",
+            "-ar", str(self.sample_rate),
+            "-acodec", "pcm_s16le",
+            "-f", "s16le",
+            "-bufsize", "65536",
             "pipe:1",
         ]
 
@@ -324,6 +379,11 @@ class AudioCapture:
         if stdout is None:
             return
 
+        # Determine if we are in multi-track mode
+        is_multi_track = self.mic_index is not None and self.system_index is not None
+        channels = 2 if is_multi_track else 1
+        chunk_size = int(self.chunk_seconds * self.sample_rate * 2 * channels)
+
         try:
             while self._running:
                 data = stdout.read(4096)
@@ -338,32 +398,57 @@ class AudioCapture:
                     continue
 
                 self._buffer.extend(data)
-                
-                if self._wav_file:
+
+                if self._wav_fd:
                     try:
-                        self._wav_file.writeframes(data)
+                        self._wav_fd.write(data)
                     except Exception as e:
-                        logger.error("Failed writing frames to wav: %s", e)
+                        logger.error("Failed writing raw data to wav file: %s", e)
 
-                while len(self._buffer) >= self._chunk_size_bytes:
-                    chunk = bytes(self._buffer[: self._chunk_size_bytes])
-                    del self._buffer[: self._chunk_size_bytes]
+                while len(self._buffer) >= chunk_size:
+                    full_chunk = bytes(self._buffer[:chunk_size])
+                    del self._buffer[:chunk_size]
 
-                    if not self._vad.filter_silent_chunks(chunk):
-                        continue
-
-                    # The timestamp should be the exact position in the final WAV file.
-                    # This prevents offsets when the meeting is stopped and resumed.
                     relative_ts = self._start_offset_s + (self._chunk_index * self.chunk_seconds)
 
-                    event = AudioChunkEvent(
-                        data=chunk,
-                        timestamp=relative_ts,
-                        chunk_index=self._chunk_index,
-                    )
+                    if is_multi_track:
+                        # De-interleave stereo data: [L, R, L, R, ...]
+                        # L = Mic (Track 0), R = System (Track 1)
+                        import numpy as np
+                        audio_np = np.frombuffer(full_chunk, dtype=np.int16).reshape(-1, 2)
+                        
+                        mic_chunk = audio_np[:, 0].tobytes()
+                        sys_chunk = audio_np[:, 1].tobytes()
+
+                        # Process Mic Track (Track 0)
+                        if self._vad.filter_silent_chunks(mic_chunk):
+                            self._enqueue_event(AudioChunkEvent(
+                                data=mic_chunk,
+                                timestamp=relative_ts,
+                                chunk_index=self._chunk_index,
+                                track_id=0
+                            ))
+
+                        # Process System Track (Track 1)
+                        if self._vad.filter_silent_chunks(sys_chunk):
+                            self._enqueue_event(AudioChunkEvent(
+                                data=sys_chunk,
+                                timestamp=relative_ts,
+                                chunk_index=self._chunk_index,
+                                track_id=1
+                            ))
+                    else:
+                        # Standard Mono Track (Track 0)
+                        if self._vad.filter_silent_chunks(full_chunk):
+                            self._enqueue_event(AudioChunkEvent(
+                                data=full_chunk,
+                                timestamp=relative_ts,
+                                chunk_index=self._chunk_index,
+                                track_id=0
+                            ))
+
                     self._chunk_index += 1
-                    self._enqueue_event(event)
-        except Exception as exc:  # pragma: no cover - hard to unit test thread failures
+        except Exception as exc:
             logger.exception("Audio reader thread failed: %s", exc)
             self._running = False
             with contextlib.suppress(Exception):

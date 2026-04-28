@@ -8,6 +8,7 @@ class AudioChunkEvent:
     data: bytes
     timestamp: float
     chunk_index: int
+    track_id: int = 0
     total_chunks: int | None = None
 
 

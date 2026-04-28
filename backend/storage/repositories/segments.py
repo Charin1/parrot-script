@@ -47,6 +47,46 @@ class SegmentsRepository:
                 rows = await cur.fetchall()
                 return [self._normalize(row) for row in rows]
 
+    async def get_by_time_range(self, meeting_id: str, start_time: float, end_time: float) -> list[dict]:
+        async with get_db() as db:
+            async with db.execute(
+                """
+                SELECT
+                    ts.*,
+                    mp.display_name AS participant_name
+                FROM transcript_segments ts
+                LEFT JOIN segment_participant_attribution spa
+                    ON spa.segment_id = ts.id
+                LEFT JOIN meeting_participants mp
+                    ON mp.id = spa.participant_id
+                WHERE ts.meeting_id = ? AND ts.start_time >= ? AND ts.start_time <= ?
+                ORDER BY ts.start_time ASC
+                """,
+                (meeting_id, start_time, end_time),
+            ) as cur:
+                rows = await cur.fetchall()
+                return [self._normalize(row) for row in rows]
+
+    async def get_by_speaker(self, meeting_id: str, speaker_name: str) -> list[dict]:
+        async with get_db() as db:
+            async with db.execute(
+                """
+                SELECT
+                    ts.*,
+                    mp.display_name AS participant_name
+                FROM transcript_segments ts
+                LEFT JOIN segment_participant_attribution spa
+                    ON spa.segment_id = ts.id
+                LEFT JOIN meeting_participants mp
+                    ON mp.id = spa.participant_id
+                WHERE ts.meeting_id = ? AND (ts.speaker LIKE ? OR mp.display_name LIKE ?)
+                ORDER BY ts.start_time ASC
+                """,
+                (meeting_id, f"%{speaker_name}%", f"%{speaker_name}%"),
+            ) as cur:
+                rows = await cur.fetchall()
+                return [self._normalize(row) for row in rows]
+
 
     async def get_by_meeting_paginated(self, meeting_id: str, limit: int = 500, offset: int = 0) -> list[dict]:
         """Alias for get_by_meeting with explicit pagination parameters."""

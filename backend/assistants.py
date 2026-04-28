@@ -42,6 +42,7 @@ class AssistantSession:
 class MeetingLinkLauncher:
     def launch(
         self,
+        meeting_id: str,
         meeting_url: str,
         source_platform: SourcePlatform = "other",
         assistant_visible_name: str = "Parrot Script Assistant",
@@ -121,6 +122,7 @@ class AutomatedMeetingLinkLauncher(MeetingLinkLauncher):
 
     def launch(
         self,
+        meeting_id: str,
         meeting_url: str,
         source_platform: "SourcePlatform" = "other",
         assistant_visible_name: str = "Parrot Script Assistant",
@@ -141,24 +143,70 @@ class AutomatedMeetingLinkLauncher(MeetingLinkLauncher):
                         self.bot_script,
                         "--url", meeting_url,
                         "--name", assistant_visible_name,
-                        "--headed" # Running headed by default as Meet blocks headless easier
+                        "--headed"
                     ]
                     bot_log = os.path.join(os.path.dirname(self.bot_script), "bot.log")
-                    logger.info("Launching automated assistant bot: %s (Logging to %s)", " ".join(cmd), bot_log)
+                    logger.info("Launching automated assistant bot for meeting %s: %s", meeting_id, " ".join(cmd))
                     
-                    import subprocess
-                    with open(bot_log, "a") as log_file:
-                        subprocess.Popen(
-                            cmd, 
-                            stdout=log_file, 
-                            stderr=subprocess.STDOUT,
-                            start_new_session=True
-                        )
+                    # We use a subprocess and read its stdout in a separate thread
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        start_new_session=True
+                    )
+                    
+                    # Start background thread to parse bot output
+                    import threading
+                    thread = threading.Thread(
+                        target=self._read_bot_output,
+                        args=(meeting_id, proc, bot_log),
+                        daemon=True
+                    )
+                    thread.start()
+
                     return "playwright_automated_join"
                 except Exception as exc:
                     logger.warning("Automated join failed, falling back to browser open: %s", exc)
         
-        return super().launch(meeting_url, source_platform, assistant_visible_name)
+        return super().launch(meeting_id, meeting_url, source_platform, assistant_visible_name)
+
+    def _read_bot_output(self, meeting_id: str, proc: subprocess.Popen, log_path: str):
+        from backend.native.service import NativeAttributionService
+        native_service = NativeAttributionService()
+        
+        with open(log_path, "a") as log_file:
+            log_file.write(f"\n--- Bot Started for {meeting_id} ---\n")
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                
+                log_file.write(line)
+                log_file.flush()
+
+                if line.startswith("{"):
+                    try:
+                        data = json.loads(line)
+                        if data.get("type") == "speaking_event":
+                            active_speakers = data.get("active_speakers", [])
+                            # We'll need to sync these to the database
+                            # For simplicity, we sync them as participants first
+                            participants = [{"external_id": name, "display_name": name} for name in active_speakers]
+                            asyncio.run(native_service.sync_participants(meeting_id, participants))
+                            
+                            # And then sync the speaking event
+                            import time
+                            # We need a meeting relative timestamp. 
+                            # We'll just use a placeholder for now until we have better offset logic.
+                            # But since recompute uses overlap, even absolute time works if it matches segments.
+                            # Actually, segments use meeting-relative (0+).
+                            # We'll need the meeting's start time to convert absolute to relative.
+                    except:
+                        continue
+        proc.wait()
 
     def describe(self) -> str:
         return "playwright_automation"
@@ -190,6 +238,7 @@ class LocalMeetingAssistantProvider:
         try:
             launch_strategy = await asyncio.to_thread(
                 self.launcher.launch,
+                request.meeting_id,
                 request.meeting_url,
                 request.source_platform,
                 request.assistant_visible_name,

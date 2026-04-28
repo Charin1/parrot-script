@@ -18,10 +18,10 @@ class CaptureSource(Protocol):
     def kind(self) -> str:
         ...
 
-    async def start(self) -> None:
+    async def stop(self) -> None:
         ...
 
-    async def stop(self) -> None:
+    def get_current_duration(self) -> float:
         ...
 
 
@@ -32,6 +32,8 @@ class LocalAudioSource:
         audio_path = Path(settings.db_path).parent / f"{meeting_id}.wav"
         self._capture = AudioCapture(
             device_index=settings.audio_device_index,
+            mic_index=settings.audio_mic_index,
+            system_index=settings.audio_system_index,
             sample_rate=settings.audio_sample_rate,
             chunk_seconds=settings.audio_chunk_seconds,
             record_to_file=audio_path,
@@ -50,6 +52,9 @@ class LocalAudioSource:
 
     async def stop(self) -> None:
         await self._capture.stop()
+
+    def get_current_duration(self) -> float:
+        return self._capture._start_offset_s + (self._capture._chunk_index * self._capture.chunk_seconds)
 
 
 class LocalVideoAudioSource:
@@ -73,6 +78,8 @@ class LocalVideoAudioSource:
         audio_path = Path(settings.db_path).parent / f"{meeting_id}.wav"
         self._audio = AudioCapture(
             device_index=settings.audio_device_index,
+            mic_index=settings.audio_mic_index,
+            system_index=settings.audio_system_index,
             sample_rate=settings.audio_sample_rate,
             chunk_seconds=settings.audio_chunk_seconds,
             record_to_file=audio_path,
@@ -104,6 +111,9 @@ class LocalVideoAudioSource:
     async def stop(self) -> None:
         await self._video.stop()
         await self._audio.stop()
+
+    def get_current_duration(self) -> float:
+        return self._audio._start_offset_s + (self._audio._chunk_index * self._audio.chunk_seconds)
 
 
 class ImportedFileAudioSource:
@@ -154,6 +164,9 @@ class ImportedFileAudioSource:
         # Best-effort: ensure pipeline can exit if it's waiting.
         with contextlib.suppress(Exception):
             self._queue.put_nowait(None)
+
+    def get_current_duration(self) -> float:
+        return self._total_chunks * self.chunk_seconds if self._total_chunks else 0.0
 
     async def _read_wav_total_frames(self) -> tuple[int, int]:
         import wave

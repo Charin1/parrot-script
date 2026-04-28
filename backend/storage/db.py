@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS meetings (
     assistant_visible_name TEXT DEFAULT 'Parrot Script Assistant',
     consent_status TEXT DEFAULT 'not_needed',
     provider_session_id TEXT,
-    provider_metadata TEXT
+    provider_metadata TEXT,
+    video_start_offset REAL DEFAULT 0.0
 );
 
 CREATE TABLE IF NOT EXISTS transcript_segments (
@@ -152,6 +153,7 @@ async def init_db() -> None:
             "recording_type": "ALTER TABLE meetings ADD COLUMN recording_type TEXT DEFAULT 'audio'",
             "video_resolution": "ALTER TABLE meetings ADD COLUMN video_resolution TEXT",
             "has_video": "ALTER TABLE meetings ADD COLUMN has_video BOOLEAN DEFAULT 0",
+            "video_start_offset": "ALTER TABLE meetings ADD COLUMN video_start_offset REAL DEFAULT 0.0",
         }
         for column, sql in video_migrations.items():
             if column not in meeting_columns:

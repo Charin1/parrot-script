@@ -18,6 +18,7 @@ from backend.storage.repositories.segments import SegmentsRepository
 from backend.storage.repositories.speakers import SpeakersRepository
 from backend.transcription.models import Segment
 from backend.transcription.whisper_stream import WhisperTranscriber
+from backend.storage.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +38,13 @@ class MeetingPipeline:
         self.clusterer = SpeakerClusterer()
         self.segments_repo = SegmentsRepository()
         self.speakers_repo = SpeakersRepository()
+        self.vector_store = VectorStore()
 
         self.running = False
         self.start_epoch: float = 0.0
         self._task: Optional[asyncio.Task] = None
+        self._index_buffer: list[TranscriptSegmentEvent] = []
+        self._INDEX_BATCH_SIZE = 5
 
     async def start(self) -> None:
         if self.running:
@@ -108,7 +112,7 @@ class MeetingPipeline:
                 if not segments:
                     continue
                 speaker_labels = await loop.run_in_executor(
-                    _cpu_executor, self._assign_speakers, chunk.data, chunk.timestamp, segments
+                    _cpu_executor, self._assign_speakers, chunk.data, chunk.timestamp, segments, chunk.track_id
                 )
                 for segment, speaker in zip(segments, speaker_labels):
                     event = TranscriptSegmentEvent(
@@ -122,6 +126,13 @@ class MeetingPipeline:
                     )
                     await self.segments_repo.insert(event)
                     await self.speakers_repo.upsert(self.meeting_id, speaker)
+                    
+                    self._index_buffer.append(event)
+                    if len(self._index_buffer) >= self._INDEX_BATCH_SIZE:
+                        batch = [asdict(e) for e in self._index_buffer]
+                        self._index_buffer.clear()
+                        asyncio.create_task(self.vector_store.add_segments(self.meeting_id, batch))
+
                     await manager.broadcast(
                         self.meeting_id,
                         {
@@ -131,6 +142,12 @@ class MeetingPipeline:
                     )
             except Exception as exc:
                 logger.exception("Failed to drain chunk: %s", exc)
+
+        # Final flush of the indexing buffer
+        if self._index_buffer:
+            batch = [asdict(e) for e in self._index_buffer]
+            self._index_buffer.clear()
+            await self.vector_store.add_segments(self.meeting_id, batch)
 
         await manager.broadcast(
             self.meeting_id,
@@ -146,6 +163,17 @@ class MeetingPipeline:
                 ),
             },
         )
+
+    async def switch_source(self, new_source: CaptureSource) -> None:
+        """Seamlessly swap the capture source (e.g. from Audio Only to Video + Audio)."""
+        if not self.running:
+            self.capture_source = new_source
+            return
+
+        logger.info("Switching capture source for meeting %s to %s", self.meeting_id, new_source.kind)
+        await self.capture_source.stop()
+        self.capture_source = new_source
+        await self.capture_source.start()
 
     async def _process_loop(self) -> None:
         """Main loop: process chunks concurrently but emit results in strict arrival order."""
@@ -191,6 +219,7 @@ class MeetingPipeline:
                         chunk.data,
                         chunk.timestamp,
                         segments,
+                        chunk.track_id,
                     )
                 except Exception as exc:
                     logger.exception("Failed to assign speakers for audio chunk seq=%d: %s", seq, exc)
@@ -208,6 +237,13 @@ class MeetingPipeline:
                     )
                     await self.segments_repo.insert(event)
                     await self.speakers_repo.upsert(self.meeting_id, speaker)
+
+                    self._index_buffer.append(event)
+                    if len(self._index_buffer) >= self._INDEX_BATCH_SIZE:
+                        batch = [asdict(e) for e in self._index_buffer]
+                        self._index_buffer.clear()
+                        asyncio.create_task(self.vector_store.add_segments(self.meeting_id, batch))
+
                     await manager.broadcast(
                         self.meeting_id,
                         {
@@ -301,7 +337,13 @@ class MeetingPipeline:
         chunk_audio: bytes,
         chunk_timestamp: float,
         segments: list[Segment],
+        track_id: int = 0,
     ) -> list[str]:
+        # Track 0 is the local user (Mic). 
+        # We assign it 100% confidence speaker label from settings.
+        if track_id == 0 and settings.audio_mic_index is not None:
+            return [settings.local_speaker_name] * len(segments)
+
         labels: list[str] = []
         for segment in segments:
             segment_audio = slice_segment_audio(

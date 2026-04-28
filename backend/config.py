@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Literal, Union, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     # Audio
     audio_device_index: int = 0
+    audio_mic_index: Optional[int] = None
+    audio_system_index: Optional[int] = None
     audio_sample_rate: int = 16000
     audio_chunk_seconds: int = 5
     audio_vad_aggressiveness: int = 2
@@ -60,6 +62,7 @@ class Settings(BaseSettings):
     )
 
     # Speaker
+    local_speaker_name: str = "Me"
     max_speakers: int = 8
     speaker_cluster_threshold: float = 0.85
     embedding_window_size: int = 50

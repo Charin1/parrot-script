@@ -103,13 +103,69 @@ async def run_bot(meeting_url: str, assistant_name: str, headless: bool = True):
 
             print("SUCCESS: JOINED") # Marker for the caller
             
-            # 5. Keep alive
+            # 5. Scraper Loop (Participant-Aware Intelligence)
+            last_speakers = set()
             while True:
-                await asyncio.sleep(5)
-                # Optional: Check if we were kicked or meeting ended
-                if await page.get_by_role("button", name="Return to home screen").is_visible(timeout=1000):
+                await asyncio.sleep(2)
+                
+                # Check if meeting ended
+                if await page.get_by_role("button", name="Return to home screen").is_visible(timeout=500):
                     logger.info("Meeting ended or assistant removed.")
                     break
+
+                try:
+                    # Google Meet Specific Scraper
+                    # 1. Try to ensure the participant list is open if we need full names
+                    # (Optional: this can be distracting if headed, but good for accuracy)
+                    
+                    # 2. Scrape Active Speakers
+                    # In Google Meet, active speakers often have a visualizer or a specific attribute.
+                    # We look for the "talking" icons in the participant list or tiles.
+                    current_speakers = []
+                    
+                    # This selector finds the name of people who have the "speaking" animation visible
+                    # Note: Selectors for Google Meet change often, using a robust-ish approach:
+                    # We look for the 'speaking' indicator icon container.
+                    speaker_elements = await page.query_selector_all("div[data-is-speaking='true']")
+                    for el in speaker_elements:
+                        # Try to find the name associated with this tile
+                        name_el = await el.query_selector("[data-self-name], [data-name]")
+                        if name_el:
+                            name = await name_el.get_attribute("data-name") or await name_el.inner_text()
+                            if name:
+                                current_speakers.append(name.strip())
+
+                    # If no specific 'data-is-speaking' attribute (sometimes it's class-based),
+                    # fall back to checking the participant list for the 'audio' icon animation.
+                    if not current_speakers:
+                        # Look for the 'Show everyone' list if it's open
+                        items = await page.query_selector_all("div[role='listitem']")
+                        for item in items:
+                            # Check if the 'speaking' icon is present in this list item
+                            # Google Meet uses a specific SVG or div for the voice visualizer
+                            is_talking = await item.query_selector("div[data-is-speaking='true'], .speaking-icon-selector")
+                            if is_talking:
+                                name_el = await item.query_selector("span")
+                                if name_el:
+                                    name = await name_el.inner_text()
+                                    current_speakers.append(name.strip())
+
+                    # Emit events for changes
+                    speaker_set = set(current_speakers)
+                    if speaker_set != last_speakers:
+                        import json
+                        import time
+                        # We emit the current active speakers list
+                        print(json.dumps({
+                            "type": "speaking_event",
+                            "timestamp": time.time(),
+                            "active_speakers": current_speakers
+                        }))
+                        last_speakers = speaker_set
+
+                except Exception as e:
+                    logger.debug(f"Scraper error (non-fatal): {e}")
+                    continue
                     
         except Exception as e:
             logger.error(f"Error during join automation: {e}")
