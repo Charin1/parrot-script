@@ -575,6 +575,9 @@ async def delete_meeting(meeting_id: UUID) -> dict[str, bool]:
         logger.warning("Delete failed: Meeting not found: %s", meeting_id_str)
         raise HTTPException(status_code=404, detail='Meeting not found')
 
+    # Also stop assistant if running
+    await assistant_provider.request_stop(meeting_id_str)
+
     logger.info("Meeting deleted successfully: %s", meeting_id_str)
     return {'deleted': True}
 
@@ -760,6 +763,9 @@ async def stop_recording(meeting_id: UUID) -> dict[str, str]:
         pipeline = active_pipelines.pop(meeting_id_str, None)
     if pipeline is not None:
         await pipeline.stop()
+
+    # Also stop assistant if running
+    await assistant_provider.request_stop(meeting_id_str)
         
     final_duration = (meeting.get('duration_s') or 0.0)
     if pipeline is not None:
@@ -777,6 +783,13 @@ async def stop_recording(meeting_id: UUID) -> dict[str, str]:
     # Mark video availability if a video file was produced
     if video_path.exists() and video_path.stat().st_size > 0:
         await meetings_repo.update(meeting_id_str, has_video=True)
+
+    # Final recompute of speaker attribution
+    from backend.native.service import NativeAttributionService
+    try:
+        await NativeAttributionService().recompute_attribution(meeting_id_str)
+    except Exception as e:
+        logger.warning("Final attribution recompute failed: %s", e)
 
     return {'status': 'completed', 'meeting_id': meeting_id_str}
 

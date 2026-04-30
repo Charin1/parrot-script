@@ -187,7 +187,7 @@ export function PastMeetingsDashboard({ meetings, onOpenMeeting, onDeleteMeeting
                 </span>
                 <button type="button" className="secondary dmr-btn" onClick={() => onOpenMeeting(meeting.id)}>
                   <SearchIcon className="btn-icon" width={13} height={13} />
-                  <span>Open</span>
+                  <span>Transcript</span>
                 </button>
                 <button
                   type="button"

@@ -105,7 +105,7 @@ class SegmentsRepository:
         async with get_db() as db:
             async with db.execute(
                 """
-                SELECT id, start_time, end_time
+                SELECT id, start_time, end_time, text, confidence
                 FROM transcript_segments
                 WHERE meeting_id = ?
                 ORDER BY start_time ASC

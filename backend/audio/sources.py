@@ -56,6 +56,9 @@ class LocalAudioSource:
     def get_current_duration(self) -> float:
         return self._capture._start_offset_s + (self._capture._chunk_index * self._capture.chunk_seconds)
 
+    def set_meeting_id(self, meeting_id: str):
+        self._capture.active_meeting_id = meeting_id
+
 
 class LocalVideoAudioSource:
     """Runs audio capture + screen capture in parallel.
@@ -114,6 +117,9 @@ class LocalVideoAudioSource:
 
     def get_current_duration(self) -> float:
         return self._audio._start_offset_s + (self._audio._chunk_index * self._audio.chunk_seconds)
+
+    def set_meeting_id(self, meeting_id: str):
+        self._audio.active_meeting_id = meeting_id
 
 
 class ImportedFileAudioSource:

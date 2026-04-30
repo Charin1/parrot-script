@@ -61,7 +61,10 @@ class MeetingPipeline:
         await loop.run_in_executor(_cpu_executor, self.transcriber.load_model)
         await loop.run_in_executor(_cpu_executor, self.clusterer.embedder.load)
 
+        if hasattr(self.capture_source, "set_meeting_id"):
+            self.capture_source.set_meeting_id(self.meeting_id)
         await self.capture_source.start()
+        
         self.running = True
         self.start_epoch = time.time()
         self._task = asyncio.create_task(self._process_loop())

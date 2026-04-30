@@ -19,8 +19,13 @@ function segmentKey(segment: Segment): string {
 
 function appendSegment(prev: Segment[], incoming: Segment): Segment[] {
   const key = segmentKey(incoming)
-  if (prev.some((segment) => segmentKey(segment) === key)) {
-    return prev
+  const existingIndex = prev.findIndex((segment) => segmentKey(segment) === key)
+  
+  if (existingIndex >= 0) {
+    // Update existing segment (required for dynamic speaker attribution mapping)
+    const next = [...prev]
+    next[existingIndex] = incoming
+    return next
   }
 
   const next = [...prev, incoming]

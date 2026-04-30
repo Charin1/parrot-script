@@ -6,12 +6,15 @@ import os
 import subprocess
 import sys
 import logging
+import time
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 from typing import Literal
 from urllib.parse import urlparse
 from uuid import uuid4
+
+from backend.storage.repositories.meetings import MeetingsRepository
 
 
 CaptureMode = Literal["private", "assistant"]
@@ -119,13 +122,19 @@ class AutomatedMeetingLinkLauncher(MeetingLinkLauncher):
     def __init__(self, venv_python: str = "./.venv/bin/python"):
         self.venv_python = venv_python
         self.bot_script = os.path.join(os.path.dirname(__file__), "automation", "assistant_bot.py")
+        self._active_bots: dict[str, subprocess.Popen] = {}
+        self._bot_speaking_state: dict[str, dict[str, float]] = {} # meeting_id -> {name: last_start_time}
+        self._bot_speaking_events: dict[str, list[dict]] = {} # meeting_id -> list of finalized events
+        self._recompute_tasks: dict[str, asyncio.Task] = {} # meeting_id -> periodic recompute task
+        self.meetings_repo = MeetingsRepository()
 
     def launch(
         self,
         meeting_id: str,
         meeting_url: str,
-        source_platform: "SourcePlatform" = "other",
+        source_platform: SourcePlatform = "other",
         assistant_visible_name: str = "Parrot Script Assistant",
+        loop: asyncio.AbstractEventLoop | None = None
     ) -> str:
         if source_platform == "google_meet" and os.path.exists(self.bot_script):
             profile_dir = os.path.join(os.path.dirname(self.bot_script), ".bot_profile")
@@ -151,18 +160,20 @@ class AutomatedMeetingLinkLauncher(MeetingLinkLauncher):
                     # We use a subprocess and read its stdout in a separate thread
                     proc = subprocess.Popen(
                         cmd,
+                        stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True,
                         bufsize=1,
                         start_new_session=True
                     )
+                    self._active_bots[meeting_id] = proc
                     
                     # Start background thread to parse bot output
                     import threading
                     thread = threading.Thread(
                         target=self._read_bot_output,
-                        args=(meeting_id, proc, bot_log),
+                        args=(meeting_id, proc, bot_log, loop),
                         daemon=True
                     )
                     thread.start()
@@ -173,7 +184,7 @@ class AutomatedMeetingLinkLauncher(MeetingLinkLauncher):
         
         return super().launch(meeting_id, meeting_url, source_platform, assistant_visible_name)
 
-    def _read_bot_output(self, meeting_id: str, proc: subprocess.Popen, log_path: str):
+    def _read_bot_output(self, meeting_id: str, proc: subprocess.Popen, log_path: str, loop: asyncio.AbstractEventLoop | None = None):
         from backend.native.service import NativeAttributionService
         native_service = NativeAttributionService()
         
@@ -190,23 +201,176 @@ class AutomatedMeetingLinkLauncher(MeetingLinkLauncher):
                 if line.startswith("{"):
                     try:
                         data = json.loads(line)
+                        if data.get("type") == "participant_sync":
+                            participants = [{"external_id": name, "display_name": name} for name in data.get("participants", [])]
+                            if participants:
+                                logger.info(f"Syncing initial guest list for {meeting_id}: {len(participants)} names")
+                                if loop:
+                                    asyncio.run_coroutine_threadsafe(native_service.sync_participants(meeting_id, participants), loop).result()
+                                    asyncio.run_coroutine_threadsafe(native_service.recompute_attribution(meeting_id), loop).result()
+                                else:
+                                    asyncio.run(native_service.sync_participants(meeting_id, participants))
+                                    asyncio.run(native_service.recompute_attribution(meeting_id))
+                            continue
+
                         if data.get("type") == "speaking_event":
                             active_speakers = data.get("active_speakers", [])
-                            # We'll need to sync these to the database
-                            # For simplicity, we sync them as participants first
-                            participants = [{"external_id": name, "display_name": name} for name in active_speakers]
-                            asyncio.run(native_service.sync_participants(meeting_id, participants))
+                            abs_time = float(data.get("timestamp", time.time()))
                             
-                            # And then sync the speaking event
-                            import time
-                            # We need a meeting relative timestamp. 
-                            # We'll just use a placeholder for now until we have better offset logic.
-                            # But since recompute uses overlap, even absolute time works if it matches segments.
-                            # Actually, segments use meeting-relative (0+).
-                            # We'll need the meeting's start time to convert absolute to relative.
-                    except:
+                            # Fetch meeting to get start time for relative offset
+                            if loop:
+                                future = asyncio.run_coroutine_threadsafe(self.meetings_repo.get(meeting_id), loop)
+                                meeting = future.result()
+                            else:
+                                meeting = asyncio.run(self.meetings_repo.get(meeting_id))
+                                
+                            if not meeting:
+                                continue
+                            
+                            # Calculate relative time (segments start at 0.0 relative to audio_start_timestamp)
+                            meeting_start_ts = meeting.get("audio_start_timestamp") or meeting.get("created_at_ts") or time.time()
+                            rel_time = max(0.0, abs_time - meeting_start_ts)
+
+                            # Update state
+                            current_state = self._bot_speaking_state.setdefault(meeting_id, {})
+                            all_events = self._bot_speaking_events.setdefault(meeting_id, [])
+                            
+                            active_set = set(active_speakers)
+                            prev_set = set(current_state.keys())
+
+                            # People who just started talking
+                            for name in active_set - prev_set:
+                                current_state[name] = rel_time
+                            
+                            # People who just stopped talking
+                            for name in prev_set - active_set:
+                                start_t = current_state.pop(name)
+                                all_events.append({
+                                    "participant_external_id": name,
+                                    "start_time": start_t,
+                                    "end_time": rel_time,
+                                    "confidence": 1.0
+                                })
+
+                            # Sync participants immediately so we have the IDs
+                            participants = [{"external_id": name, "display_name": name} for name in active_speakers]
+                            if participants:
+                                if loop:
+                                    asyncio.run_coroutine_threadsafe(native_service.sync_participants(meeting_id, participants), loop).result()
+                                else:
+                                    asyncio.run(native_service.sync_participants(meeting_id, participants))
+                            
+                            # Periodically sync all speaking events and recompute
+                            # (We use all_events + currently active ones extended to rel_time)
+                            # Sync if someone started/stopped talking, OR periodically for long continuous speakers
+                            state_changed = bool(active_set != prev_set)
+                            if state_changed or len(all_events) % 5 == 0:
+                                live_events = list(all_events)
+                                for name, start_t in current_state.items():
+                                    live_events.append({
+                                        "participant_external_id": name,
+                                        "start_time": start_t,
+                                        "end_time": rel_time + 1.0, # Pad slightly for live
+                                        "confidence": 1.0
+                                    })
+                                
+                                if live_events:
+                                if live_events:
+                                    if loop:
+                                        asyncio.run_coroutine_threadsafe(native_service.sync_speaking_events(meeting_id, live_events, "bot_scraper"), loop).result()
+                                        res = asyncio.run_coroutine_threadsafe(native_service.recompute_attribution(meeting_id), loop).result()
+                                    else:
+                                        asyncio.run(native_service.sync_speaking_events(meeting_id, live_events, "bot_scraper"))
+                                        res = asyncio.run(native_service.recompute_attribution(meeting_id))
+                                        
+
+
+                                    # Start periodic recompute so new segments get attributed as Whisper produces them
+                                    if loop and meeting_id not in self._recompute_tasks:
+                                        async def _periodic_recompute(mid: str, svc):
+                                            try:
+                                                while mid in self._active_bots:
+                                                    await asyncio.sleep(5)
+                                                    r = await svc.recompute_attribution(mid)
+                                                    if r["segments_mapped"] > 0:
+
+                                            except asyncio.CancelledError:
+                                                pass
+                                            except Exception as exc:
+                                                logger.error(f"Periodic recompute error for {mid}: {exc}")
+                                        task = asyncio.run_coroutine_threadsafe(
+                                            _periodic_recompute(meeting_id, native_service), loop
+                                        )
+                                        self._recompute_tasks[meeting_id] = task
+                                    
+                    except Exception as e:
+                        import traceback
+                        logger.error("Error parsing bot speaking event: %s\n%s", e, traceback.format_exc())
                         continue
+
+        # Finalize any ongoing speaking state when the bot exits
+        try:
+            current_state = self._bot_speaking_state.get(meeting_id, {})
+            all_events = self._bot_speaking_events.get(meeting_id, [])
+            if current_state:
+                # Get the meeting's end time for the final event boundary
+                final_time = time.time()
+                if loop:
+                    meeting = asyncio.run_coroutine_threadsafe(self.meetings_repo.get(meeting_id), loop).result()
+                else:
+                    meeting = asyncio.run(self.meetings_repo.get(meeting_id))
+                if meeting:
+                    meeting_start_ts = meeting.get("created_at_ts") or final_time
+                    rel_end = max(0.0, final_time - meeting_start_ts)
+                    for name, start_t in current_state.items():
+                        all_events.append({
+                            "participant_external_id": name,
+                            "start_time": start_t,
+                            "end_time": rel_end,
+                            "confidence": 1.0
+                        })
+
+            if all_events and loop:
+                from backend.native.service import NativeAttributionService
+                native_service = NativeAttributionService()
+                participants = [{"external_id": ev["participant_external_id"], "display_name": ev["participant_external_id"]} for ev in all_events]
+                asyncio.run_coroutine_threadsafe(native_service.sync_participants(meeting_id, participants), loop).result()
+                asyncio.run_coroutine_threadsafe(native_service.sync_speaking_events(meeting_id, all_events, "bot_scraper"), loop).result()
+                res = asyncio.run_coroutine_threadsafe(native_service.recompute_attribution(meeting_id), loop).result()
+
+        except Exception as e:
+            logger.error("Error finalizing speaking events for %s: %s", meeting_id, e)
+
+        # Cleanup
+        # Cancel periodic recompute first (it checks self._active_bots to stop)
+        task = self._recompute_tasks.pop(meeting_id, None)
+        if task:
+            task.cancel()
+        self._bot_speaking_state.pop(meeting_id, None)
+        self._bot_speaking_events.pop(meeting_id, None)
         proc.wait()
+        self._active_bots.pop(meeting_id, None)
+
+    def stop(self, meeting_id: str):
+        proc = self._active_bots.pop(meeting_id, None)
+        if proc and proc.poll() is None:
+            logger.info("Stopping automated assistant bot for meeting %s", meeting_id)
+            try:
+                # Try graceful shutdown first by sending QUIT to stdin
+                if proc.stdin:
+                    proc.stdin.write("QUIT\n")
+                    proc.stdin.flush()
+                
+                # Wait a bit for it to process the leave
+                proc.wait(timeout=3)
+            except (subprocess.TimeoutExpired, BrokenPipeError, OSError):
+                # Fall back to termination if it's stuck
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
 
     def describe(self) -> str:
         return "playwright_automation"
@@ -234,7 +398,12 @@ class LocalMeetingAssistantProvider:
     def __init__(self, launcher: MeetingLinkLauncher | None = None):
         self.launcher = launcher or AutomatedMeetingLinkLauncher()
 
+    async def request_stop(self, meeting_id: str):
+        if hasattr(self.launcher, "stop"):
+            await asyncio.to_thread(self.launcher.stop, meeting_id)
+
     async def request_join(self, request: AssistantJoinRequest) -> AssistantSession:
+        loop = asyncio.get_running_loop()
         try:
             launch_strategy = await asyncio.to_thread(
                 self.launcher.launch,
@@ -242,6 +411,7 @@ class LocalMeetingAssistantProvider:
                 request.meeting_url,
                 request.source_platform,
                 request.assistant_visible_name,
+                loop
             )
         except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
             return AssistantSession(

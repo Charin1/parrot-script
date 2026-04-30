@@ -17,6 +17,17 @@ class MeetingsRepository:
             return None
 
         meeting = dict(row)
+        # Convert created_at string to Unix timestamp if present
+        created_at = meeting.get("created_at")
+        if created_at:
+            import datetime
+            try:
+                # SQLite datetime('now') returns 'YYYY-MM-DD HH:MM:SS' in UTC
+                dt = datetime.datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+                meeting["created_at_ts"] = dt.replace(tzinfo=datetime.timezone.utc).timestamp()
+            except Exception:
+                meeting["created_at_ts"] = None
+
         meeting["capture_mode"] = meeting.get("capture_mode") or "private"
         meeting["ghost_mode"] = bool(meeting.get("ghost_mode", True))
         meeting["assistant_join_status"] = meeting.get("assistant_join_status") or "not_requested"

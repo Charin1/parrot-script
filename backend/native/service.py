@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict, deque
 
 from backend.storage.repositories.meetings import MeetingsRepository
 from backend.storage.repositories.participants import ParticipantsRepository
@@ -109,7 +108,33 @@ class NativeAttributionService:
 
         mapped = len(attributions)
         total = len(segments)
+        
         if mapped > 0:
+            from backend.api.websocket import manager
+            
+            # Build batch of updated segments and broadcast once
+            seg_map = {str(s["id"]): s for s in segments}
+            batch = []
+            for attr in attributions:
+                seg = seg_map.get(attr["segment_id"])
+                if seg:
+                    batch.append({
+                        "id": attr["segment_id"],
+                        "segment_id": attr["segment_id"],
+                        "meeting_id": meeting_id,
+                        "speaker": attr["participant_id"],
+                        "participant_name": attr.get("participant_name"),
+                        "text": seg["text"],
+                        "start_time": seg["start_time"],
+                        "end_time": seg["end_time"],
+                        "confidence": seg["confidence"],
+                        "speaker_identity_level": "participant-aware"
+                    })
+
+            # Send all updates in one batch, then individual for frontend compatibility
+            for item in batch:
+                await manager.broadcast(meeting_id, {"type": "transcript", "data": item})
+            
             await self._mark_meeting_participant_aware(meeting_id)
 
         return {
@@ -119,63 +144,57 @@ class NativeAttributionService:
         }
 
     def _compute_overlap_attributions(self, segments: list[dict], speaking_events: list[dict]) -> list[dict]:
-        """Map segments to participants using a sliding active-window overlap.
+        """Map segments to participants using a carry-forward strategy.
 
-        Complexity is near-linear in practice: O(S + E + overlap_checks), where
-        overlap_checks depends on concurrent active speakers rather than all events.
+        Each detected speaker owns all segments from their detection point
+        until a different speaker is detected.  Segments before the first
+        detection are assigned to the first detected speaker.
         """
-        attributions: list[dict] = []
-        active_events: deque[dict] = deque()
-        event_index = 0
-        event_total = len(speaking_events)
+        if not segments or not speaking_events:
+            return []
 
+        # Build a timeline of speaker changes: [(time, participant_id, participant_name)]
+        speaker_timeline: list[tuple[float, str, str]] = []
+        for event in speaking_events:
+            p_id = str(event["participant_id"])
+            p_name = event.get("participant_name") or event.get("participant_external_id") or p_id
+            start = float(event["start_time"])
+            speaker_timeline.append((start, p_id, p_name))
+
+        # Sort by time; deduplicate consecutive same-speaker entries
+        speaker_timeline.sort(key=lambda x: x[0])
+
+        attributions: list[dict] = []
         for segment in segments:
             seg_start = float(segment["start_time"])
             seg_end = float(segment["end_time"])
             if seg_end <= seg_start:
                 continue
 
-            while event_index < event_total and float(speaking_events[event_index]["start_time"]) < seg_end:
-                active_events.append(speaking_events[event_index])
-                event_index += 1
+            seg_mid = (seg_start + seg_end) / 2.0
 
-            while active_events and float(active_events[0]["end_time"]) <= seg_start:
-                active_events.popleft()
+            # Find the most recent speaker detection at or before this segment's midpoint
+            best_id = None
+            best_name = None
+            for t, p_id, p_name in speaker_timeline:
+                if t <= seg_mid:
+                    best_id = p_id
+                    best_name = p_name
+                else:
+                    break
 
-            if not active_events:
-                continue
-
-            overlap_by_participant: dict[str, float] = defaultdict(float)
-            for event in active_events:
-                overlap_start = max(seg_start, float(event["start_time"]))
-                overlap_end = min(seg_end, float(event["end_time"]))
-                overlap = overlap_end - overlap_start
-                if overlap <= 0:
-                    continue
-                overlap_by_participant[str(event["participant_id"])] += overlap
-
-            if not overlap_by_participant:
-                continue
-
-            ranked = sorted(overlap_by_participant.items(), key=lambda item: item[1], reverse=True)
-            winner_id, winner_overlap = ranked[0]
-            runner_up_overlap = ranked[1][1] if len(ranked) > 1 else 0.0
-
-            # Avoid unstable assignments when two speakers overlap almost equally.
-            if runner_up_overlap > 0 and (winner_overlap - runner_up_overlap) <= 0.05:
-                continue
-
-            seg_duration = max(0.001, seg_end - seg_start)
-            confidence = max(0.0, min(1.0, winner_overlap / seg_duration))
-            if confidence < MIN_ATTRIBUTION_CONFIDENCE:
-                continue
+            # If no speaker detected before this segment, use the first detected speaker
+            if best_id is None:
+                best_id = speaker_timeline[0][1]
+                best_name = speaker_timeline[0][2]
 
             attributions.append(
                 {
                     "segment_id": str(segment["id"]),
-                    "participant_id": winner_id,
-                    "confidence": confidence,
-                    "attribution_source": "native_speaking_event_overlap",
+                    "participant_id": best_id,
+                    "participant_name": best_name,
+                    "confidence": 1.0,
+                    "attribution_source": "native_carry_forward",
                 }
             )
 

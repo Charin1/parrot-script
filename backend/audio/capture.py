@@ -43,6 +43,8 @@ class AudioCapture:
             sample_rate=self.sample_rate,
         )
         self._start_offset_s: float = 0.0
+        self.active_meeting_id: Optional[str] = None
+        self.audio_start_timestamp: Optional[float] = None
         self._resolved_device_index: int | str | None = None
 
     async def start(self) -> None:
@@ -144,11 +146,12 @@ class AudioCapture:
                 self._wav_fd = None
 
     def _write_initial_wav_header(self, fd: Any) -> None:
-        """Write a 44-byte PCM WAV header with placeholder sizes."""
+        """Write a 44-byte PCM WAV header with a large placeholder size to allow live playback."""
         import struct
         # RIFF header
         fd.write(b'RIFF')
-        fd.write(struct.pack('<I', 0)) # Placeholder for RIFF chunk size
+        # Use a large placeholder (approx 2.4 hours at 16kHz mono) to allow browsers to seek/play
+        fd.write(struct.pack('<I', 0x7FFFFFFF)) 
         fd.write(b'WAVE')
         # fmt chunk
         fd.write(b'fmt ')
@@ -161,7 +164,8 @@ class AudioCapture:
         fd.write(struct.pack('<H', 16)) # BitsPerSample
         # data chunk
         fd.write(b'data')
-        fd.write(struct.pack('<I', 0)) # Placeholder for data chunk size
+        fd.write(struct.pack('<I', 0x7FFFFFFF - 36))
+        fd.flush()
 
     def _finalize_wav_header(self) -> None:
         """Update RIFF and data chunk sizes in the WAV header based on actual file size."""
@@ -387,6 +391,19 @@ class AudioCapture:
         try:
             while self._running:
                 data = stdout.read(4096)
+                if data and self.audio_start_timestamp is None:
+                    self.audio_start_timestamp = time.time()
+                    if self.active_meeting_id and self._loop:
+                        try:
+                            from backend.storage.repositories.meetings import MeetingsRepository
+                            repo = MeetingsRepository()
+                            asyncio.run_coroutine_threadsafe(
+                                repo.update(self.active_meeting_id, created_at_ts=self.audio_start_timestamp),
+                                self._loop
+                            )
+                        except Exception as e:
+                            logger.error("Failed to sync audio start time: %s", e)
+
                 if not data:
                     if not self._running:
                         break
@@ -402,6 +419,7 @@ class AudioCapture:
                 if self._wav_fd:
                     try:
                         self._wav_fd.write(data)
+                        self._wav_fd.flush()
                     except Exception as e:
                         logger.error("Failed writing raw data to wav file: %s", e)
 
@@ -421,31 +439,28 @@ class AudioCapture:
                         sys_chunk = audio_np[:, 1].tobytes()
 
                         # Process Mic Track (Track 0)
-                        if self._vad.filter_silent_chunks(mic_chunk):
-                            self._enqueue_event(AudioChunkEvent(
-                                data=mic_chunk,
-                                timestamp=relative_ts,
-                                chunk_index=self._chunk_index,
-                                track_id=0
-                            ))
+                        self._enqueue_event(AudioChunkEvent(
+                            data=mic_chunk,
+                            timestamp=relative_ts,
+                            chunk_index=self._chunk_index,
+                            track_id=0
+                        ))
 
                         # Process System Track (Track 1)
-                        if self._vad.filter_silent_chunks(sys_chunk):
-                            self._enqueue_event(AudioChunkEvent(
-                                data=sys_chunk,
-                                timestamp=relative_ts,
-                                chunk_index=self._chunk_index,
-                                track_id=1
-                            ))
+                        self._enqueue_event(AudioChunkEvent(
+                            data=sys_chunk,
+                            timestamp=relative_ts,
+                            chunk_index=self._chunk_index,
+                            track_id=1
+                        ))
                     else:
                         # Standard Mono Track (Track 0)
-                        if self._vad.filter_silent_chunks(full_chunk):
-                            self._enqueue_event(AudioChunkEvent(
-                                data=full_chunk,
-                                timestamp=relative_ts,
-                                chunk_index=self._chunk_index,
-                                track_id=0
-                            ))
+                        self._enqueue_event(AudioChunkEvent(
+                            data=full_chunk,
+                            timestamp=relative_ts,
+                            chunk_index=self._chunk_index,
+                            track_id=0
+                        ))
 
                     self._chunk_index += 1
         except Exception as exc:
