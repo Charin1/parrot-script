@@ -199,7 +199,6 @@ export function MeetingControls({ meeting, liveDurationS = 0, onStart, onStop, b
           ) : null}
 
           {captureMode === 'assistant' ? (
-            <div className="start-config-row">
               <div className="field-group">
                 <label htmlFor="meeting-url">Meeting URL</label>
                 <input
@@ -210,17 +209,6 @@ export function MeetingControls({ meeting, liveDurationS = 0, onStart, onStop, b
                   placeholder="https://meet.google.com/... or https://zoom.us/..."
                 />
               </div>
-              <div className="field-group">
-                <label htmlFor="assistant-name">Assistant Name</label>
-                <input
-                  id="assistant-name"
-                  value={assistantVisibleName}
-                  disabled={sessionActive || busy}
-                  onChange={(event) => setAssistantVisibleName(event.target.value)}
-                  placeholder="Parrot Script Assistant"
-                />
-              </div>
-            </div>
           ) : null}
 
           {/* ── Recording Type ── */}

@@ -311,6 +311,33 @@ npm run build
 - If you want system audio, confirm BlackHole is installed and routed correctly
 - On macOS, Parrot Script now fast-fails when FFmpeg cannot open the selected input and shows a device/permission error instead of silently recording silence
 
+### 🎧 Offline / Private Capture Setup (macOS)
+
+When using **Ghost Mode ON** (Private capture) on the same machine where you are joining a meeting, you must route audio correctly so that Parrot can "hear" the meeting while you also hear it through your speakers/headphones.
+
+#### Scenario A: Hosting and Joining on the Same MacBook
+1. **Install BlackHole 2ch**: `brew install blackhole-2ch`.
+2. **Create a Multi-Output Device**:
+   - Open the **Audio MIDI Setup** app (found in Applications > Utilities).
+   - Click the **+** button (bottom left) and select **Create Multi-Output Device**.
+   - Check both **BlackHole 2ch** AND your **MacBook Speakers** (or Headphones).
+   - *Tip: Set the MacBook Speakers as the "Master Device" so you can still control volume.*
+3. **Route Meeting Audio**:
+   - In your Meeting app (Google Meet / Zoom / Teams), set the **Speaker/Output** to your new "Multi-Output Device".
+   - This sends the meeting audio to both your ears AND the virtual BlackHole cable simultaneously.
+4. **Configure Parrot Script**:
+   - Set `AUDIO_DEVICE_INDEX` in `.env` to the index for **BlackHole 2ch**.
+   - Start recording. Parrot will now capture the meeting audio privately from the virtual cable.
+
+> [!TIP]
+> **Manual Meeting Output**: If you prefer not to use a Multi-Output device, you can set your **System Output** to BlackHole 2ch (so Parrot captures all system sounds), and then inside your **Meeting App settings** (Meet/Zoom), explicitly set the **Speaker/Output** to "MacBook Air Speakers." This routes the meeting audio to your ears while Parrot still captures it via the system-wide stream.
+
+#### Scenario B: Hosting on a Separate Laptop
+- If you are running Parrot Script on a dedicated "hosting" laptop and joining the meeting from your primary work laptop:
+- Use **Ghost Mode OFF** (Assistant). 
+- Provide the meeting URL, and the Assistant will join the call as a visible participant. 
+- Since the bot is a separate "guest," it captures audio directly from the stream. No special local audio routing is required on either machine.
+
 ### Multi-Track Audio Capture
 
 Parrot Script now supports capturing your microphone and system audio as separate streams. This enables **100% accurate speaker attribution** for yourself without relying on AI guessing.

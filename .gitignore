@@ -53,4 +53,5 @@ automation/.bot_profile
 .bot_profile
 backend/automation/bot.log
 backend/automation/debug_meeting.*
+backend/automation/*.png
 **/debug_meeting.*
