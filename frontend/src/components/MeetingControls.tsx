@@ -171,126 +171,127 @@ export function MeetingControls({ meeting, liveDurationS = 0, onStart, onStop, b
 
   return (
     <div className="controls-panel">
-      <div className="controls-content">
-        <h2>{meeting.title}</h2>
-        <p className="muted">Status: {meeting.status}</p>
-        <div className="start-config">
-          {/* ── Ghost Mode ── */}
-          <div className="field-group">
-            <label htmlFor="ghost-mode-select">Ghost Mode</label>
-            <select
-              id="ghost-mode-select"
-              value={captureMode}
-              disabled={sessionActive || busy}
-              onChange={(event) => setCaptureMode(event.target.value as CaptureMode)}
-            >
-              <option value="private">ON: Private on-device capture</option>
-              <option value="assistant">OFF: Visible meeting assistant</option>
-            </select>
-          </div>
-
-          <p className="muted">
-            {ghostModeEnabled
-              ? 'Ghost mode ON keeps capture fully on this device and invisible to other participants.'
-              : 'Ghost mode OFF opens the meeting link on this device and starts visible, real-time capture.'}
-          </p>
-          {assistantModeSpeakerHint ? (
-            <p className="muted">{assistantModeSpeakerHint}</p>
-          ) : null}
-
-          {captureMode === 'assistant' ? (
-              <div className="field-group">
-                <label htmlFor="meeting-url">Meeting URL</label>
-                <input
-                  id="meeting-url"
-                  value={meetingUrl}
-                  disabled={sessionActive || busy}
-                  onChange={(event) => setMeetingUrl(event.target.value)}
-                  placeholder="https://meet.google.com/... or https://zoom.us/..."
-                />
-              </div>
-          ) : null}
-
-          {/* ── Recording Type ── */}
-          <div className="field-group">
-            <label htmlFor="recording-type-select">Recording Type</label>
-            <select
-              id="recording-type-select"
-              value={recordingType}
-              disabled={busy || (sessionActive && meeting.recording_type === 'video_audio')}
-              onChange={(event) => setRecordingType(event.target.value as RecordingType)}
-            >
-              <option value="audio">Audio Only</option>
-              <option value="video_audio">Video + Audio (screen recording)</option>
-            </select>
-          </div>
-
-          {/* ── Resolution — only shown when video+audio selected ── */}
-          {recordingType === 'video_audio' ? (
-            <div className="field-group resolution-field">
-              <label htmlFor="resolution-select">Resolution</label>
-              <select
-                id="resolution-select"
-                value={videoResolution}
-                disabled={busy}
-                onChange={(event) => setVideoResolution(event.target.value as VideoResolution)}
-              >
-                {RESOLUTION_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-              <p className="muted resolution-hint">
-                {ghostModeEnabled
-                  ? 'Full screen will be recorded.'
-                  : 'The meeting window screen area will be recorded.'}
-                {' '}15 fps · H.264 · MP4
-              </p>
-            </div>
-          ) : null}
-
-          <div className="mode-summary">
-            <span className={`badge ${ghostModeEnabled ? 'badge-idle' : 'badge-ok'}`}>
-              {modeBadgeLabel}
-            </span>
-            {recordingType === 'video_audio' ? (
-              <span className="badge badge-video">🎬 Video</span>
-            ) : null}
-            {joinState ? <span className="muted">Assistant state: {joinState.replace(/_/g, ' ')}</span> : null}
-          </div>
+      <div className="controls-title-row">
+        <div className="controls-title">
+          <h2>{meeting.title}</h2>
+          <span className="muted" style={{ fontSize: '0.82rem' }}>Status: {meeting.status}</span>
+        </div>
+        <div className="controls-actions">
+          <span className={`badge ${recording ? 'badge-live' : assistantActive ? 'badge-ok' : 'badge-idle'}`}>
+            {statusBadgeLabel}
+          </span>
+          <button
+            type="button"
+            disabled={busy || (sessionActive && recordingType === meeting.recording_type)}
+            onClick={() =>
+              void onStart({
+                capture_mode: captureMode,
+                ghost_mode: ghostModeEnabled,
+                meeting_url: captureMode === 'assistant' ? meetingUrl : null,
+                assistant_visible_name: captureMode === 'assistant' ? assistantVisibleName : null,
+                recording_type: recordingType,
+                video_resolution: recordingType === 'video_audio' ? videoResolution : null,
+              })
+            }
+          >
+            <PlayIcon className="btn-icon" width={14} height={14} />
+            <span>{sessionActive ? 'Switch' : meeting.status === 'completed' ? 'Resume' : 'Start'}</span>
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || !sessionActive}
+            onClick={() => void onStop()}
+          >
+            <StopIcon className="btn-icon" width={14} height={14} />
+            <span>Stop</span>
+          </button>
         </div>
       </div>
 
-      <div className="controls-actions">
-        <span className={`badge ${recording ? 'badge-live' : assistantActive ? 'badge-ok' : 'badge-idle'}`}>
-          {statusBadgeLabel}
-        </span>
+      <div className="start-config">
+        {/* ── Ghost Mode ── */}
+        <div className="field-group">
+          <label htmlFor="ghost-mode-select">Ghost Mode</label>
+          <select
+            id="ghost-mode-select"
+            value={captureMode}
+            disabled={sessionActive || busy}
+            onChange={(event) => setCaptureMode(event.target.value as CaptureMode)}
+          >
+            <option value="private">ON: Private on-device capture</option>
+            <option value="assistant">OFF: Visible meeting assistant</option>
+          </select>
+        </div>
 
-        <button
-          type="button"
-          disabled={busy || (sessionActive && recordingType === meeting.recording_type)}
-          onClick={() =>
-            void onStart({
-              capture_mode: captureMode,
-              ghost_mode: ghostModeEnabled,
-              meeting_url: captureMode === 'assistant' ? meetingUrl : null,
-              assistant_visible_name: captureMode === 'assistant' ? assistantVisibleName : null,
-              recording_type: recordingType,
-              video_resolution: recordingType === 'video_audio' ? videoResolution : null,
-            })
-          }
-        >
-          <PlayIcon className="btn-icon" width={14} height={14} />
-          <span>{sessionActive ? 'Switch' : meeting.status === 'completed' ? 'Resume' : 'Start'}</span>
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          disabled={busy || !sessionActive}
-          onClick={() => void onStop()}
-        >
-          <StopIcon className="btn-icon" width={14} height={14} />
-          <span>Stop</span>
-        </button>
+        <p className="muted">
+          {ghostModeEnabled
+            ? 'Ghost mode ON keeps capture fully on this device and invisible to other participants.'
+            : 'Ghost mode OFF opens the meeting link on this device and starts visible, real-time capture.'}
+        </p>
+        {assistantModeSpeakerHint ? (
+          <p className="muted">{assistantModeSpeakerHint}</p>
+        ) : null}
+
+        {captureMode === 'assistant' ? (
+            <div className="field-group">
+              <label htmlFor="meeting-url">Meeting URL</label>
+              <input
+                id="meeting-url"
+                value={meetingUrl}
+                disabled={sessionActive || busy}
+                onChange={(event) => setMeetingUrl(event.target.value)}
+                placeholder="https://meet.google.com/... or https://zoom.us/..."
+              />
+            </div>
+        ) : null}
+
+        {/* ── Recording Type ── */}
+        <div className="field-group">
+          <label htmlFor="recording-type-select">Recording Type</label>
+          <select
+            id="recording-type-select"
+            value={recordingType}
+            disabled={busy || (sessionActive && meeting.recording_type === 'video_audio')}
+            onChange={(event) => setRecordingType(event.target.value as RecordingType)}
+          >
+            <option value="audio">Audio Only</option>
+            <option value="video_audio">Video + Audio (screen recording)</option>
+          </select>
+        </div>
+
+        {/* ── Resolution — only shown when video+audio selected ── */}
+        {recordingType === 'video_audio' ? (
+          <div className="field-group resolution-field">
+            <label htmlFor="resolution-select">Resolution</label>
+            <select
+              id="resolution-select"
+              value={videoResolution}
+              disabled={busy}
+              onChange={(event) => setVideoResolution(event.target.value as VideoResolution)}
+            >
+              {RESOLUTION_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <p className="muted resolution-hint">
+              {ghostModeEnabled
+                ? 'Full screen will be recorded.'
+                : 'The meeting window screen area will be recorded.'}
+              {' '}15 fps · H.264 · MP4
+            </p>
+          </div>
+        ) : null}
+
+        <div className="mode-summary">
+          <span className={`badge ${ghostModeEnabled ? 'badge-idle' : 'badge-ok'}`}>
+            {modeBadgeLabel}
+          </span>
+          {recordingType === 'video_audio' ? (
+            <span className="badge badge-video">🎬 Video</span>
+          ) : null}
+          {joinState ? <span className="muted">Assistant state: {joinState.replace(/_/g, ' ')}</span> : null}
+        </div>
       </div>
     </div>
   )

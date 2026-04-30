@@ -663,7 +663,7 @@ select {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 0.9rem;
+  padding: 0.75rem 0.9rem;
   box-shadow: var(--shadow);
 }
 
@@ -704,23 +704,52 @@ select {
 
 .controls-panel {
   display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.controls-title-row {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
+  gap: 0.5rem;
   flex-wrap: wrap;
 }
 
-.controls-content {
-  flex: 1 1 320px;
+.controls-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
   min-width: 0;
+}
+
+.controls-title h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.controls-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
 }
 
 .start-config {
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
-  margin-top: 0.8rem;
+  gap: 0.4rem;
   max-width: 760px;
+}
+
+.start-config > .muted {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  opacity: 0.85;
 }
 
 .start-config-row {
@@ -732,21 +761,22 @@ select {
 .field-group {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.2rem;
 }
 
 .field-group label {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
 .field-group select {
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.55rem 0.72rem;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
   background: var(--bg-elevated);
   color: var(--text);
+  font-size: 0.88rem;
 }
 
 .mode-summary {
@@ -797,10 +827,11 @@ button:disabled {
 input {
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.55rem 0.72rem;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
   background: var(--bg-elevated);
   color: var(--text);
+  font-size: 0.88rem;
 }
 
 .btn-icon {
@@ -836,7 +867,8 @@ input {
 }
 
 .status-panel {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  padding: 0.45rem 0.9rem;
 }
 
 .meeting-list,
@@ -953,7 +985,7 @@ code {
     max-height: 60vh;
   }
 
-  .controls-panel {
+  .controls-title-row {
     flex-direction: column;
     align-items: flex-start;
   }
@@ -1592,7 +1624,7 @@ code {
 .workspace-main {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 0.5rem;
   overflow-y: auto;
   padding-right: 0.5rem;
   min-height: 0; /* allows scrolling */

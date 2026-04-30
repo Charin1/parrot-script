@@ -287,11 +287,11 @@ export function LiveTranscript({
 
   return (
     <div className="panel">
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <h3 style={{ margin: 0, minWidth: '150px' }}>Live Transcript</h3>
+      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+        <h3 style={{ margin: 0, minWidth: '120px', fontSize: '1rem' }}>Live Transcript</h3>
 
         {meetingId && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap', flex: 1, justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', flex: 1, justifyContent: 'flex-end' }}>
             {/* Custom Audio Player */}
             <AudioPlayer
               src={audioSrc}
@@ -305,32 +305,35 @@ export function LiveTranscript({
 
             {/* Download Buttons */}
             {segments.length > 0 && (
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', gap: '0.35rem' }}>
                 <button
                   type="button"
                   className="secondary"
+                  style={{ padding: '0.3rem 0.55rem', fontSize: '0.8rem' }}
                   onClick={() => void api.downloadAudio(meetingId)}
                   title="Download Audio"
                 >
-                  <DownloadIcon className="btn-icon" width={14} height={14} />
+                  <DownloadIcon className="btn-icon" width={12} height={12} />
                   <span>WAV</span>
                 </button>
                 <button
                   type="button"
                   className="secondary"
+                  style={{ padding: '0.3rem 0.55rem', fontSize: '0.8rem' }}
                   onClick={() => void api.downloadTranscript(meetingId, 'json')}
                   title="Download JSON"
                 >
-                  <DownloadIcon className="btn-icon" width={14} height={14} />
+                  <DownloadIcon className="btn-icon" width={12} height={12} />
                   <span>JSON</span>
                 </button>
                 <button
                   type="button"
                   className="secondary"
+                  style={{ padding: '0.3rem 0.55rem', fontSize: '0.8rem' }}
                   onClick={() => void api.downloadTranscript(meetingId, 'pdf')}
                   title="Download PDF"
                 >
-                  <DownloadIcon className="btn-icon" width={14} height={14} />
+                  <DownloadIcon className="btn-icon" width={12} height={12} />
                   <span>PDF</span>
                 </button>
               </div>
